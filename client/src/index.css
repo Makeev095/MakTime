@@ -22,7 +22,11 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html, body, #root { height: 100%; overflow: hidden; }
+html, body, #root { height: 100dvh; height: 100%; overflow: hidden; }
+
+@supports (height: 100dvh) {
+  html, body, #root { height: 100dvh; }
+}
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, sans-serif;
@@ -94,7 +98,7 @@ input, button, textarea { font-family: inherit; font-size: inherit; }
 .auth-submit:disabled { opacity: 0.6; cursor: not-allowed; }
 
 /* ===== App Layout ===== */
-.app { display: flex; height: 100%; overflow: hidden; }
+.app { display: flex; height: 100%; height: 100dvh; overflow: hidden; }
 .sidebar-container {
   width: 360px; min-width: 360px; height: 100%;
   border-right: 1px solid var(--border);
@@ -219,7 +223,7 @@ input, button, textarea { font-family: inherit; font-size: inherit; }
 .empty-state-content p { font-size: 15px; }
 
 /* ===== Chat Window ===== */
-.chat-window { display: flex; flex-direction: column; height: 100%; background: var(--bg-primary); }
+.chat-window { display: flex; flex-direction: column; height: 100%; height: 100dvh; background: var(--bg-primary); }
 .chat-header {
   display: flex; align-items: center; gap: 12px; padding: 10px 16px;
   background: var(--bg-secondary); border-bottom: 1px solid var(--border); min-height: 64px;

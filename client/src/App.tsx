@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useAuth } from './context/AuthContext';
 import { useSocket } from './context/SocketContext';
 import AuthPage from './components/AuthPage';
@@ -23,6 +23,19 @@ export default function App() {
   const [showStoryUpload, setShowStoryUpload] = useState(false);
   const [storyRefresh, setStoryRefresh] = useState(0);
 
+  const handleConversationUpdate = useCallback(() => {
+    setRefreshKey((k) => k + 1);
+  }, []);
+
+  const handleSelectConversation = useCallback((conv: Conversation) => {
+    setActiveConversation(conv);
+    if (window.innerWidth < 768) setShowSidebar(false);
+  }, []);
+
+  const handleStartCall = useCallback((userId: string, name: string, conversationId: string) => {
+    setCallTarget({ userId, name, conversationId });
+  }, []);
+
   if (loading) {
     return (
       <div className="loading-screen">
@@ -33,15 +46,6 @@ export default function App() {
   }
 
   if (!user) return <AuthPage />;
-
-  const handleSelectConversation = (conv: Conversation) => {
-    setActiveConversation(conv);
-    if (window.innerWidth < 768) setShowSidebar(false);
-  };
-
-  const handleStartCall = (userId: string, name: string, conversationId: string) => {
-    setCallTarget({ userId, name, conversationId });
-  };
 
   const handleAcceptCall = () => {
     if (incomingCall) {
@@ -71,7 +75,7 @@ export default function App() {
             conversation={activeConversation}
             onBack={() => setShowSidebar(true)}
             onStartCall={handleStartCall}
-            onConversationUpdate={() => setRefreshKey((k) => k + 1)}
+            onConversationUpdate={handleConversationUpdate}
           />
         ) : (
           <div className="empty-state">

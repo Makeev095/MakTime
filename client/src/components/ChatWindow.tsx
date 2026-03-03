@@ -116,6 +116,18 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, peerTyping]);
 
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const onResize = () => {
+      requestAnimationFrame(() => {
+        bottomRef.current?.scrollIntoView({ behavior: 'instant' });
+      });
+    };
+    vv.addEventListener('resize', onResize);
+    return () => vv.removeEventListener('resize', onResize);
+  }, []);
+
   // --- Typing indicator ---
   const handleTextChange = (value: string) => {
     setText(value);

@@ -456,12 +456,21 @@ app.put('/api/auth/profile', authMiddleware, (req, res) => {
 
 // --- Search & Contacts ---
 app.get('/api/users/search', authMiddleware, (req, res) => {
-  const query = req.query.q as string;
-  if (!query || query.length < 2) return res.json([]);
-  const q = `%${query.toLowerCase()}%`;
-  const users = stmts.searchUsers.all(q, q, (req as any).userId) as any[];
+  const query = (req.query.q as string || '').trim();
+  if (query.length < 2) return res.json([]);
+  const userId = (req as any).userId;
+  const lower = query.toLowerCase();
+
+  const users = db.prepare(
+    'SELECT id, username, display_name, avatar_color, status FROM users WHERE id != ? LIMIT 500'
+  ).all(userId) as any[];
+
+  const filtered = users.filter((u) =>
+    u.username.includes(lower) || u.display_name.toLowerCase().includes(lower)
+  ).slice(0, 20);
+
   res.json(
-    users.map((u) => ({
+    filtered.map((u) => ({
       id: u.id,
       username: u.username,
       displayName: u.display_name,
@@ -729,8 +738,10 @@ io.on('connection', (socket) => {
   stmts.updateStatus.run('online', userId);
   io.emit('user:status', { userId, status: 'online' });
 
-  const conversations = stmts.getUserConversations.all(userId, userId) as any[];
-  conversations.forEach((c) => socket.join(c.id));
+  const allRooms = db.prepare(
+    'SELECT conversation_id FROM conversation_participants WHERE user_id = ?'
+  ).all(userId) as any[];
+  allRooms.forEach((c: any) => socket.join(c.conversation_id));
 
   // --- Messaging ---
   socket.on('message:send', (data: {

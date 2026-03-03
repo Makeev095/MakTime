@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { playNotificationSound } from '../context/SocketContext';
@@ -28,6 +28,8 @@ export default function Sidebar({ activeConversationId, onSelectConversation, on
   const [displayName, setDisplayName] = useState(user?.displayName || '');
   const [bio, setBio] = useState('');
   const [activeTab, setActiveTab] = useState<SidebarTab>('all');
+  const activeConvRef = useRef(activeConversationId);
+  activeConvRef.current = activeConversationId;
 
   const fetchConversations = useCallback(async () => {
     const res = await fetch('/api/conversations', {
@@ -50,13 +52,15 @@ export default function Sidebar({ activeConversationId, onSelectConversation, on
 
   useEffect(() => {
     if (!socket) return;
-    const handler = () => {
+    const handler = (msg: any) => {
       fetchConversations();
-      playNotificationSound();
+      if (msg?.senderId !== user?.id && msg?.conversationId !== activeConvRef.current) {
+        playNotificationSound();
+      }
     };
     socket.on('message:new', handler);
     return () => { socket.off('message:new', handler); };
-  }, [socket, fetchConversations]);
+  }, [socket, fetchConversations, user?.id]);
 
   useEffect(() => {
     const unsub = onConversationCreated(() => {
