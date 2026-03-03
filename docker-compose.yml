@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  maktime:
+    build: .
+    container_name: maktime
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+    volumes:
+      - maktime-data:/app/server/data
+      - maktime-uploads:/app/server/uploads
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  nginx:
+    image: nginx:alpine
+    container_name: maktime-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Uncomment for SSL:
+      # - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - maktime
+
+volumes:
+  maktime-data:
+  maktime-uploads:

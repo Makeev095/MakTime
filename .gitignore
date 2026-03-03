@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output
+client/dist/
+server/dist/
+
+# Database
+server/data/
+server/maktime.db
+server/maktime.db-wal
+server/maktime.db-shm
+
+# Uploads (user-generated content)
+server/uploads/
+
+# Environment
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript cache
+*.tsbuildinfo
