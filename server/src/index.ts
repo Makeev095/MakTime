@@ -87,9 +87,10 @@ const upload = multer({
 app.use('/uploads', express.static(UPLOADS_DIR));
 
 // --- Database Setup ---
-const DB_DIR = path.join(__dirname, '..', 'data');
-fs.mkdirSync(DB_DIR, { recursive: true });
-const db = new Database(path.join(DB_DIR, 'maktime.db'));
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'maktime.db');
+const dbDir = path.dirname(DB_PATH);
+if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 

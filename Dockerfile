@@ -28,7 +28,7 @@ WORKDIR /app
 COPY --from=server-build /app/server/dist ./server/dist
 COPY --from=client-build /app/client/dist ./client/dist
 
-RUN mkdir -p server/uploads/images server/uploads/voice server/uploads/video server/uploads/files server/data
+RUN mkdir -p server/uploads/images server/uploads/voice server/uploads/video server/uploads/files
 
 ENV NODE_ENV=production
 ENV PORT=3001

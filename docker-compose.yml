@@ -11,8 +11,9 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3001
+      - DB_PATH=/app/server/db/maktime.db
     volumes:
-      - maktime-data:/app/server/data
+      - maktime-db:/app/server/db
       - maktime-uploads:/app/server/uploads
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001"]
@@ -35,5 +36,5 @@ services:
       - maktime
 
 volumes:
-  maktime-data:
+  maktime-db:
   maktime-uploads:

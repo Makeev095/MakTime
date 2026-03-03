@@ -1,134 +1,167 @@
 # MakTime — Мессенджер с видеозвонками
 
-PWA-мессенджер с реальным временем: чаты, видеозвонки (WebRTC), голосовые сообщения, истории, отправка файлов.
+PWA-мессенджер: чаты в реальном времени, видеозвонки (WebRTC), голосовые сообщения, истории, отправка фото/видео/файлов.
 
 ## Стек
 
 - **Frontend**: React 18, TypeScript, Vite, Socket.IO Client, Lucide React
-- **Backend**: Node.js, Express, Socket.IO, SQLite (better-sqlite3), JWT, bcrypt
+- **Backend**: Node.js, Express, Socket.IO, SQLite, JWT, bcrypt
 - **Видеозвонки**: WebRTC
-- **Деплой**: Docker + Nginx
-
-## Возможности
-
-- Регистрация и авторизация (JWT, сессия сохраняется)
-- Поиск пользователей, контакты
-- Чаты в реальном времени (текст, голосовые, фото, видео, файлы)
-- Ответ на сообщения, удаление
-- Видеозвонки с фильтрами и переключением камеры
-- Истории (24ч) с реакциями и ответами
-- Индикатор набора текста, статус онлайн
-- Tab-бар: Все / Непрочитанные / Контакты
-- PWA — установка на телефон
+- **Деплой**: Docker + Nginx или VPS без Docker
 
 ---
 
 ## Быстрый старт (разработка)
 
 ```bash
-# 1. Клонировать
-git clone <repo-url> && cd MakTime
-
-# 2. Установить зависимости
+# Установить зависимости
 cd server && npm install && cd ../client && npm install && cd ..
 
-# 3. Запустить (два терминала)
-cd server && npm run dev     # Бэкенд → localhost:3001
-cd client && npm run dev     # Фронтенд → localhost:5173
+# Запустить (два терминала)
+cd server && npm run dev       # → localhost:3001
+cd client && npm run dev       # → localhost:5173
 ```
-
-Открыть http://localhost:5173
 
 ---
 
-## Деплой
+## Деплой на хостинг / VPS
 
-### Вариант 1: Docker (рекомендуется)
+### Что нужно
 
-**Требования**: Docker и Docker Compose на сервере.
-
-```bash
-# 1. Загрузить проект на сервер
-scp -r MakTime/ user@your-server:/opt/maktime
-# или git clone
-
-# 2. Подключиться к серверу
-ssh user@your-server
-cd /opt/maktime
-
-# 3. Создать .env
-cp .env.example .env
-nano .env
-# Обязательно: задать JWT_SECRET (см. ниже)
-
-# 4. Собрать и запустить
-docker compose up -d --build
-
-# 5. Проверить
-docker compose logs -f maktime
-curl http://localhost
-```
-
-Приложение доступно на порту 80 (Nginx проксирует на 3001).
-
-**Обновление:**
-```bash
-git pull
-docker compose up -d --build
-```
-
-**SSL (HTTPS):**
-1. Получить сертификат (Let's Encrypt):
-```bash
-apt install certbot
-certbot certonly --standalone -d your-domain.com
-```
-2. В `nginx.conf` раскомментировать блок SSL, заменить `your-domain.com`
-3. В `docker-compose.yml` раскомментировать volume для SSL:
-```yaml
-- /etc/letsencrypt/live/your-domain.com:/etc/nginx/ssl:ro
-```
-4. Перезапустить: `docker compose up -d`
+- VPS с Ubuntu 22+ (или любой Linux)
+- Node.js 20+
+- Nginx
+- Доменное имя (необязательно, можно по IP)
 
 ---
 
-### Вариант 2: Без Docker (VPS)
-
-**Требования**: Node.js 20+, Nginx.
+### Шаг 1. Подготовить сервер
 
 ```bash
-# 1. Установить Node.js 20
+# Обновить систему
+sudo apt update && sudo apt upgrade -y
+
+# Установить Node.js 20
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 
-# 2. Загрузить проект
-cd /opt
-git clone <repo-url> maktime && cd maktime
+# Установить Nginx и PM2
+sudo apt install -y nginx
+sudo npm install -g pm2
 
-# 3. Создать .env
-cp .env.example .env
-nano .env
-
-# 4. Собрать клиент
-cd client && npm ci && npm run build && cd ..
-
-# 5. Собрать и запустить сервер
-cd server && npm ci && npx tsc && cd ..
-
-# 6. Запустить через PM2
-npm install -g pm2
-cd server
-NODE_ENV=production JWT_SECRET="ваш-секрет" pm2 start dist/index.js --name maktime
-pm2 save && pm2 startup
+# Проверить
+node -v    # v20.x.x
+npm -v
+pm2 -v
+nginx -v
 ```
 
-**Nginx (файл `/etc/nginx/sites-available/maktime`):**
+---
+
+### Шаг 2. Загрузить проект на сервер
+
+**Вариант А — через Git:**
+```bash
+cd /opt
+sudo git clone <ваш-repo-url> maktime
+sudo chown -R $USER:$USER /opt/maktime
+cd /opt/maktime
+```
+
+**Вариант Б — через SCP (со своего компьютера):**
+```bash
+# На ВАШЕМ компьютере:
+scp -r MakTime/ user@ваш-сервер:/opt/maktime
+```
+
+---
+
+### Шаг 3. Создать .env
+
+```bash
+cd /opt/maktime
+cp .env.example .env
+nano .env
+```
+
+Содержимое `.env`:
+```env
+JWT_SECRET=ваш-секретный-ключ
+PORT=3001
+NODE_ENV=production
+```
+
+Сгенерировать `JWT_SECRET`:
+```bash
+openssl rand -hex 32
+```
+Скопировать результат в `JWT_SECRET=`.
+
+---
+
+### Шаг 4. Собрать проект
+
+```bash
+cd /opt/maktime
+
+# Собрать клиент
+cd client
+npm ci
+npm run build
+cd ..
+
+# Собрать сервер
+cd server
+npm ci
+npx tsc
+cd ..
+```
+
+---
+
+### Шаг 5. Запустить через PM2
+
+```bash
+cd /opt/maktime/server
+
+# Загрузить переменные из .env и запустить
+pm2 start dist/index.js --name maktime --env production \
+  --node-args="--env-file=../.env"
+
+# Или если --env-file не поддерживается (Node < 20.6):
+JWT_SECRET="ваш-секрет" PORT=3001 NODE_ENV=production \
+  pm2 start dist/index.js --name maktime
+
+# Сохранить для автозапуска после перезагрузки
+pm2 save
+pm2 startup
+# PM2 выведет команду — выполните её (начинается с sudo)
+```
+
+Проверить:
+```bash
+pm2 status
+curl http://localhost:3001    # должен вернуть HTML
+```
+
+---
+
+### Шаг 6. Настроить Nginx
+
+```bash
+sudo nano /etc/nginx/sites-available/maktime
+```
+
+Вставить:
 ```nginx
 server {
     listen 80;
-    server_name your-domain.com;
+    server_name ваш-домен.com;
+    # Если без домена: server_name _;
+
     client_max_body_size 50M;
 
+    # WebSocket
     location /socket.io/ {
         proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
@@ -136,9 +169,12 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 86400;
     }
 
+    # Всё остальное
     location / {
         proxy_pass http://127.0.0.1:3001;
         proxy_set_header Host $host;
@@ -146,76 +182,120 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
+
+    # Кэш статики
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?)$ {
+        proxy_pass http://127.0.0.1:3001;
+        expires 7d;
+        add_header Cache-Control "public, immutable";
+    }
 }
 ```
 
+Активировать:
 ```bash
 sudo ln -s /etc/nginx/sites-available/maktime /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl reload nginx
 ```
 
-**SSL:**
+Теперь приложение доступно по `http://ваш-домен.com` или `http://ip-адрес`.
+
+---
+
+### Шаг 7. SSL (HTTPS) — рекомендуется
+
 ```bash
-sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d your-domain.com
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d ваш-домен.com
+```
+
+Certbot автоматически настроит HTTPS. Автопродление уже включено.
+
+---
+
+### Обновление
+
+```bash
+cd /opt/maktime
+git pull
+
+cd client && npm ci && npm run build && cd ..
+cd server && npm ci && npx tsc && cd ..
+
+pm2 restart maktime
+```
+
+---
+
+### Мониторинг
+
+```bash
+pm2 status          # Статус процесса
+pm2 logs maktime    # Логи в реальном времени
+pm2 monit           # CPU/RAM мониторинг
+```
+
+---
+
+## Деплой через Docker (альтернатива)
+
+```bash
+cp .env.example .env
+nano .env              # задать JWT_SECRET
+
+docker compose up -d --build
+
+# Обновление:
+git pull && docker compose up -d --build
 ```
 
 ---
 
 ## Файл .env
 
-Создайте файл `.env` в корне проекта:
-
-```env
-# ОБЯЗАТЕЛЬНО — секретный ключ для JWT (сгенерируйте случайный)
-# Команда: openssl rand -hex 32
-JWT_SECRET=тут-ваш-случайный-ключ-64-символа
-
-# Порт (менять не нужно, если используете Docker)
-PORT=3001
-
-# Окружение
-NODE_ENV=production
-```
-
-**Как сгенерировать JWT_SECRET:**
-```bash
-openssl rand -hex 32
-# Пример результата: a1b2c3d4e5f6...
-```
+| Переменная | Описание | Пример |
+|---|---|---|
+| `JWT_SECRET` | Секретный ключ для токенов (обязательно!) | `openssl rand -hex 32` |
+| `PORT` | Порт сервера | `3001` |
+| `NODE_ENV` | Окружение | `production` |
 
 ---
 
 ## .gitignore
 
-Уже создан. Исключает:
+Исключены из git:
 - `node_modules/` — зависимости
-- `server/data/` — база данных SQLite
-- `server/uploads/` — загруженные файлы
+- `server/maktime.db` — база данных
+- `server/uploads/` — загруженные файлы пользователей
 - `client/dist/`, `server/dist/` — сборки
 - `.env` — секреты
 - `.DS_Store`, IDE-файлы
 
 ---
 
-## Структура
+## Структура проекта
 
 ```
 MakTime/
-├── client/          # React-приложение
+├── client/              # React-приложение
 │   ├── src/
-│   │   ├── components/    # UI-компоненты
-│   │   ├── context/       # Auth и Socket контексты
-│   │   ├── types.ts       # TypeScript-типы
-│   │   ├── App.tsx        # Главный компонент
-│   │   └── index.css      # Стили
+│   │   ├── components/  # Sidebar, ChatWindow, VideoCall, Stories...
+│   │   ├── context/     # AuthContext, SocketContext
+│   │   ├── types.ts
+│   │   ├── App.tsx
+│   │   └── index.css
+│   ├── dist/            # Сборка (после npm run build)
 │   └── vite.config.ts
-├── server/          # Express-сервер
-│   └── src/
-│       └── index.ts       # Сервер, API, Socket.IO, БД
+├── server/              # Express + Socket.IO
+│   ├── src/index.ts     # Весь бэкенд
+│   ├── dist/            # Сборка (после npx tsc)
+│   └── uploads/         # Загруженные файлы
 ├── Dockerfile
 ├── docker-compose.yml
 ├── nginx.conf
 ├── .env.example
-└── .gitignore
+├── .gitignore
+└── README.md
 ```

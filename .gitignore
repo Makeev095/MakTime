@@ -6,10 +6,10 @@ client/dist/
 server/dist/
 
 # Database
-server/data/
 server/maktime.db
 server/maktime.db-wal
 server/maktime.db-shm
+server/db/
 
 # Uploads (user-generated content)
 server/uploads/

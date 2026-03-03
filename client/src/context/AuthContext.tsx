@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import type { User } from '../types';
 
 interface AuthContextType {
@@ -16,51 +16,59 @@ export function useAuth() {
   return useContext(AuthContext);
 }
 
-const TOKEN_KEY = 'maktime_token';
-const USER_KEY = 'maktime_user';
+function getStoredToken(): string | null {
+  return localStorage.getItem('token') || null;
+}
+
+function getStoredUser(): User | null {
+  try {
+    const raw = localStorage.getItem('maktime_user');
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(() => {
-    try {
-      const cached = localStorage.getItem(USER_KEY);
-      return cached ? JSON.parse(cached) : null;
-    } catch { return null; }
-  });
-  const [token, setToken] = useState<string | null>(localStorage.getItem(TOKEN_KEY));
-  const [loading, setLoading] = useState(true);
-  const didVerify = useRef(false);
+  const [token, setToken] = useState<string | null>(getStoredToken);
+  const [user, setUser] = useState<User | null>(getStoredUser);
+  const [loading, setLoading] = useState(!!getStoredToken());
 
   useEffect(() => {
-    if (didVerify.current) return;
-    didVerify.current = true;
-
-    if (!token) {
+    const t = getStoredToken();
+    if (!t) {
       setLoading(false);
       return;
     }
-    fetch('/api/auth/me', {
-      headers: { Authorization: `Bearer ${token}` },
-    })
+
+    let cancelled = false;
+    fetch('/api/auth/me', { headers: { Authorization: `Bearer ${t}` } })
       .then((r) => {
-        if (!r.ok) throw new Error();
+        if (!r.ok) throw new Error('unauthorized');
         return r.json();
       })
       .then((data) => {
+        if (cancelled) return;
         setUser(data);
-        localStorage.setItem(USER_KEY, JSON.stringify(data));
+        localStorage.setItem('maktime_user', JSON.stringify(data));
       })
       .catch(() => {
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(USER_KEY);
+        if (cancelled) return;
+        localStorage.removeItem('token');
+        localStorage.removeItem('maktime_user');
         setToken(null);
         setUser(null);
       })
-      .finally(() => setLoading(false));
-  }, [token]);
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, []);
 
   const persistAuth = useCallback((tkn: string, usr: User) => {
-    localStorage.setItem(TOKEN_KEY, tkn);
-    localStorage.setItem(USER_KEY, JSON.stringify(usr));
+    localStorage.setItem('token', tkn);
+    localStorage.setItem('maktime_user', JSON.stringify(usr));
     setToken(tkn);
     setUser(usr);
   }, []);
@@ -88,8 +96,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [persistAuth]);
 
   const logout = useCallback(() => {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
+    localStorage.removeItem('token');
+    localStorage.removeItem('maktime_user');
     setToken(null);
     setUser(null);
   }, []);
