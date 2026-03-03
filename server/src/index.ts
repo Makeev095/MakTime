@@ -28,13 +28,17 @@ const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 });
 
 // --- Security ---
-app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+app.set('trust proxy', 1);
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy: false,
+}));
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 300,
+  max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, try again later' },
@@ -43,7 +47,7 @@ app.use('/api/', apiLimiter);
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 50,
   message: { error: 'Too many auth attempts, try again later' },
 });
 
@@ -738,7 +742,6 @@ io.on('connection', (socket) => {
     duration?: number;
     replyToId?: string;
   }) => {
-    // Verify sender is a participant
     const participants = stmts.getConversationParticipants.all(data.conversationId) as any[];
     if (!participants.some((p) => p.id === userId)) return;
     if (data.fileUrl && !data.fileUrl.startsWith('/uploads/')) return;
@@ -769,7 +772,6 @@ io.on('connection', (socket) => {
 
     io.to(data.conversationId).emit('message:new', message);
 
-    // Check if this is the first message in the conversation — notify recipient
     const msgCount = (db.prepare(
       'SELECT COUNT(*) as cnt FROM messages WHERE conversation_id = ? AND deleted = 0'
     ).get(data.conversationId) as any).cnt;

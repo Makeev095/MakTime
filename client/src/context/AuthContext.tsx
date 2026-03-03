@@ -44,21 +44,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     fetch('/api/auth/me', { headers: { Authorization: `Bearer ${t}` } })
       .then((r) => {
-        if (!r.ok) throw new Error('unauthorized');
+        if (r.status === 401) {
+          localStorage.removeItem('token');
+          localStorage.removeItem('maktime_user');
+          setToken(null);
+          setUser(null);
+          return null;
+        }
+        if (!r.ok) return null;
         return r.json();
       })
       .then((data) => {
-        if (cancelled) return;
+        if (cancelled || !data) return;
         setUser(data);
         localStorage.setItem('maktime_user', JSON.stringify(data));
       })
-      .catch(() => {
-        if (cancelled) return;
-        localStorage.removeItem('token');
-        localStorage.removeItem('maktime_user');
-        setToken(null);
-        setUser(null);
-      })
+      .catch(() => {})
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
