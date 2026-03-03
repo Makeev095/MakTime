@@ -14,7 +14,7 @@ export default function App() {
   const { user, loading } = useAuth();
   const { incomingCall } = useSocket();
   const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
-  const [callTarget, setCallTarget] = useState<{ userId: string; name: string; conversationId: string } | null>(null);
+  const [callTarget, setCallTarget] = useState<{ userId: string; name: string; conversationId: string; isInitiator: boolean } | null>(null);
   const [showSidebar, setShowSidebar] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -33,7 +33,7 @@ export default function App() {
   }, []);
 
   const handleStartCall = useCallback((userId: string, name: string, conversationId: string) => {
-    setCallTarget({ userId, name, conversationId });
+    setCallTarget({ userId, name, conversationId, isInitiator: true });
   }, []);
 
   if (loading) {
@@ -53,6 +53,7 @@ export default function App() {
         userId: incomingCall.from,
         name: incomingCall.callerName,
         conversationId: incomingCall.conversationId,
+        isInitiator: false,
       });
     }
   };
@@ -93,7 +94,7 @@ export default function App() {
           targetUserId={callTarget.userId}
           targetName={callTarget.name}
           conversationId={callTarget.conversationId}
-          isInitiator={!incomingCall || incomingCall.from !== callTarget.userId}
+          isInitiator={callTarget.isInitiator}
           onEnd={() => setCallTarget(null)}
         />
       )}
