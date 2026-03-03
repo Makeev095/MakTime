@@ -13,16 +13,28 @@ interface Props {
   onEnd: () => void;
 }
 
-const ICE_CONFIG: RTCConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' },
-  ],
-  iceCandidatePoolSize: 10,
-};
+function buildIceConfig(): RTCConfiguration {
+  const host = window.location.hostname;
+  return {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      {
+        urls: `turn:${host}:3478`,
+        username: 'maktime',
+        credential: 'MakTimeT0rn2026!',
+      },
+      {
+        urls: `turn:${host}:3478?transport=tcp`,
+        username: 'maktime',
+        credential: 'MakTimeT0rn2026!',
+      },
+    ],
+    iceCandidatePoolSize: 10,
+    iceTransportPolicy: 'all',
+  };
+}
 
 const VIDEO_FILTERS = [
   { name: 'Без фильтра', css: 'none' },
@@ -100,7 +112,7 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
         localStreamRef.current = stream;
         if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
-        const pc = new RTCPeerConnection(ICE_CONFIG);
+        const pc = new RTCPeerConnection(buildIceConfig());
         pcRef.current = pc;
 
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));

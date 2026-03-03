@@ -65,6 +65,9 @@ nano .env
 JWT_SECRET=сюда_вставить_сгенерированный_ключ
 PORT=3001
 NODE_ENV=production
+TURN_USER=maktime
+TURN_PASS=MakTimeT0rn2026!
+TURN_REALM=ваш-домен.com
 ```
 
 Сохранить: `Ctrl+O` → Enter → `Ctrl+X`
@@ -85,10 +88,11 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Должно быть два контейнера со статусом `Up`:
+Должно быть три контейнера со статусом `Up`:
 ```
 maktime        Up
 maktime-nginx  Up
+maktime-turn   Up
 ```
 
 Посмотреть логи:
@@ -135,7 +139,31 @@ docker compose restart nginx
 
 ---
 
-## Шаг 8. Включить HTTPS (рекомендуется)
+## Шаг 8. Открыть порты для видеозвонков (TURN)
+
+Для работы видеозвонков через NAT необходимо открыть UDP-порты TURN-сервера:
+
+```bash
+ufw allow 3478/tcp
+ufw allow 3478/udp
+ufw allow 49152:49252/udp
+ufw reload
+```
+
+Если `ufw` не активен, включите его (убедитесь, что SSH-порт 22 открыт!):
+```bash
+ufw allow 22/tcp
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw allow 3478/tcp
+ufw allow 3478/udp
+ufw allow 49152:49252/udp
+ufw enable
+```
+
+---
+
+## Шаг 9. Включить HTTPS (обязательно)
 
 HTTPS нужен для видеозвонков (WebRTC работает только через HTTPS).
 
