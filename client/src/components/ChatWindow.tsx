@@ -27,6 +27,7 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
   const [recordingTime, setRecordingTime] = useState(0);
   const [peerTyping, setPeerTyping] = useState(false);
   const [playingVoice, setPlayingVoice] = useState<string | null>(null);
+  const [selectedMsgId, setSelectedMsgId] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -119,13 +120,20 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
-    const onResize = () => {
+    const update = () => {
+      document.documentElement.style.setProperty('--app-height', `${vv.height}px`);
       requestAnimationFrame(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'instant' });
       });
     };
-    vv.addEventListener('resize', onResize);
-    return () => vv.removeEventListener('resize', onResize);
+    update();
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+      document.documentElement.style.removeProperty('--app-height');
+    };
   }, []);
 
   // --- Typing indicator ---
@@ -406,12 +414,16 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
           <div key={group.date} className="date-group">
             <div className="date-separator"><span>{group.date}</span></div>
             {group.messages.map((msg) => (
-              <div key={msg.id} className={`message ${msg.senderId === user?.id ? 'sent' : 'received'}`}>
+              <div
+                key={msg.id}
+                className={`message ${msg.senderId === user?.id ? 'sent' : 'received'} ${selectedMsgId === msg.id ? 'selected' : ''}`}
+                onClick={() => setSelectedMsgId(selectedMsgId === msg.id ? null : msg.id)}
+              >
                 {renderMessageContent(msg)}
                 <div className="message-actions">
-                  <button onClick={() => setReplyTo(msg)} title="Ответить"><Reply size={14} /></button>
+                  <button onClick={(e) => { e.stopPropagation(); setReplyTo(msg); setSelectedMsgId(null); }} title="Ответить"><Reply size={14} /></button>
                   {msg.senderId === user?.id && (
-                    <button onClick={() => deleteMessage(msg.id)} title="Удалить"><Trash2 size={14} /></button>
+                    <button onClick={(e) => { e.stopPropagation(); deleteMessage(msg.id); setSelectedMsgId(null); }} title="Удалить"><Trash2 size={14} /></button>
                   )}
                 </div>
               </div>
