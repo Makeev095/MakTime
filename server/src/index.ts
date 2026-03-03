@@ -872,11 +872,17 @@ io.on('connection', (socket) => {
 });
 
 // --- Static Files in Production ---
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../../client/dist')));
+const CLIENT_DIST = path.resolve(__dirname, '..', '..', 'client', 'dist');
+const clientIndexHtml = path.join(CLIENT_DIST, 'index.html');
+
+if (fs.existsSync(clientIndexHtml)) {
+  console.log('Serving client from:', CLIENT_DIST);
+  app.use(express.static(CLIENT_DIST));
   app.get('*', (_req, res) => {
-    res.sendFile(path.join(__dirname, '../../client/dist/index.html'));
+    res.sendFile(clientIndexHtml);
   });
+} else {
+  console.log('Client dist not found at:', CLIENT_DIST, '(dev mode)');
 }
 
 httpServer.listen(PORT, () => {
