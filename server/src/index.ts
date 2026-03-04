@@ -721,7 +721,7 @@ setInterval(() => {
 const onlineUsers = new Map<string, string>();
 
 io.use((socket, next) => {
-  const token = socket.handshake.auth.token;
+  const token = socket.handshake.auth?.token || (socket.handshake.query?.token as string);
   if (!token) return next(new Error('Authentication required'));
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
