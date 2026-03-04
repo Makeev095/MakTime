@@ -8,15 +8,20 @@ import VideoCall from './components/VideoCall';
 import IncomingCallModal from './components/IncomingCallModal';
 import StoryViewer from './components/StoryViewer';
 import StoryUpload from './components/StoryUpload';
+import { MessageCircle, Users, Settings } from 'lucide-react';
 import type { Conversation, StoryUser } from './types';
+
+type MobileTab = 'chats' | 'contacts' | 'settings';
 
 export default function App() {
   const { user, loading } = useAuth();
   const { incomingCall } = useSocket();
   const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
   const [callTarget, setCallTarget] = useState<{ userId: string; name: string; conversationId: string; isInitiator: boolean } | null>(null);
+  const [callMinimized, setCallMinimized] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [mobileTab, setMobileTab] = useState<MobileTab>('chats');
 
   // Stories state
   const [storyViewData, setStoryViewData] = useState<{ users: StoryUser[]; startIdx: number } | null>(null);
@@ -29,7 +34,10 @@ export default function App() {
 
   const handleSelectConversation = useCallback((conv: Conversation) => {
     setActiveConversation(conv);
-    if (window.innerWidth < 768) setShowSidebar(false);
+    if (window.innerWidth < 768) {
+      setShowSidebar(false);
+      setMobileTab('chats');
+    }
   }, []);
 
   const handleStartCall = useCallback((userId: string, name: string, conversationId: string) => {
@@ -67,6 +75,7 @@ export default function App() {
           onViewStories={(users, startIdx) => setStoryViewData({ users, startIdx })}
           onAddStory={() => setShowStoryUpload(true)}
           refreshKey={refreshKey}
+          mobileTab={mobileTab}
         />
       </div>
 
@@ -89,13 +98,41 @@ export default function App() {
         )}
       </div>
 
+      {showSidebar && (
+        <div className="mobile-tab-bar">
+          <button
+            className={`mobile-tab ${mobileTab === 'chats' ? 'active' : ''}`}
+            onClick={() => setMobileTab('chats')}
+          >
+            <MessageCircle size={22} />
+            <span>Чаты</span>
+          </button>
+          <button
+            className={`mobile-tab ${mobileTab === 'contacts' ? 'active' : ''}`}
+            onClick={() => setMobileTab('contacts')}
+          >
+            <Users size={22} />
+            <span>Контакты</span>
+          </button>
+          <button
+            className={`mobile-tab ${mobileTab === 'settings' ? 'active' : ''}`}
+            onClick={() => setMobileTab('settings')}
+          >
+            <Settings size={22} />
+            <span>Настройки</span>
+          </button>
+        </div>
+      )}
+
       {callTarget && (
         <VideoCall
           targetUserId={callTarget.userId}
           targetName={callTarget.name}
           conversationId={callTarget.conversationId}
           isInitiator={callTarget.isInitiator}
-          onEnd={() => setCallTarget(null)}
+          onEnd={() => { setCallTarget(null); setCallMinimized(false); }}
+          minimized={callMinimized}
+          onToggleMinimize={() => setCallMinimized((m) => !m)}
         />
       )}
 

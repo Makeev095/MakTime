@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import {
-  PhoneOff, Mic, MicOff, Video, VideoOff, Sparkles, RotateCcw,
+  PhoneOff, Mic, MicOff, Video, VideoOff, Sparkles, RotateCcw, Minimize2, Maximize2,
 } from 'lucide-react';
 
 interface Props {
@@ -11,6 +11,8 @@ interface Props {
   conversationId: string;
   isInitiator: boolean;
   onEnd: () => void;
+  minimized?: boolean;
+  onToggleMinimize?: () => void;
 }
 
 function buildIceConfig(): RTCConfiguration {
@@ -47,7 +49,7 @@ const VIDEO_FILTERS = [
   { name: 'Розовый', css: 'hue-rotate(320deg) saturate(1.3) brightness(1.1)' },
 ];
 
-export default function VideoCall({ targetUserId, targetName, conversationId, isInitiator, onEnd }: Props) {
+export default function VideoCall({ targetUserId, targetName, conversationId, isInitiator, onEnd, minimized, onToggleMinimize }: Props) {
   const { user } = useAuth();
   const { socket, setIncomingCall } = useSocket();
   const [status, setStatus] = useState(isInitiator ? 'calling' : 'connecting');
@@ -280,23 +282,52 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
 
   const switchCamera = async () => {
     const newFacing = !isFrontCamera;
-    setIsFrontCamera(newFacing);
     try {
+      const oldTrack = localStreamRef.current?.getVideoTracks()[0];
+      if (oldTrack) {
+        oldTrack.stop();
+        localStreamRef.current?.removeTrack(oldTrack);
+      }
+
       const newStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: newFacing ? 'user' : 'environment' },
+        video: { facingMode: { exact: newFacing ? 'user' : 'environment' } },
         audio: false,
       });
       const newTrack = newStream.getVideoTracks()[0];
+
       const pc = pcRef.current;
       if (pc) {
         const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
         if (sender) await sender.replaceTrack(newTrack);
       }
-      const oldTrack = localStreamRef.current?.getVideoTracks()[0];
-      if (oldTrack) { localStreamRef.current?.removeTrack(oldTrack); oldTrack.stop(); }
+
       localStreamRef.current?.addTrack(newTrack);
-      if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
-    } catch {}
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = null;
+        localVideoRef.current.srcObject = localStreamRef.current;
+      }
+      setIsFrontCamera(newFacing);
+    } catch (e) {
+      console.warn('[WebRTC] Camera switch failed:', e);
+      try {
+        const fallback = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: newFacing ? 'user' : 'environment' },
+          audio: false,
+        });
+        const fallbackTrack = fallback.getVideoTracks()[0];
+        const pc = pcRef.current;
+        if (pc) {
+          const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
+          if (sender) await sender.replaceTrack(fallbackTrack);
+        }
+        localStreamRef.current?.addTrack(fallbackTrack);
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = null;
+          localVideoRef.current.srcObject = localStreamRef.current;
+        }
+        setIsFrontCamera(newFacing);
+      } catch {}
+    }
   };
 
   const formatDur = (s: number) => {
@@ -311,6 +342,33 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
   };
 
   const currentFilter = VIDEO_FILTERS[filterIdx].css;
+
+  if (minimized) {
+    return (
+      <div className="video-call-pip" onClick={onToggleMinimize}>
+        <video
+          ref={remoteVideoRef}
+          className="pip-remote-video"
+          autoPlay playsInline
+        />
+        <div className="pip-info">
+          <span className="pip-name">{targetName}</span>
+          <span className="pip-status">{statusText[status]}</span>
+        </div>
+        <div className="pip-actions" onClick={(e) => e.stopPropagation()}>
+          <button className={`pip-btn ${isMuted ? 'active' : ''}`} onClick={toggleMute}>
+            {isMuted ? <MicOff size={16} /> : <Mic size={16} />}
+          </button>
+          <button className="pip-btn end" onClick={endCall}>
+            <PhoneOff size={16} />
+          </button>
+          <button className="pip-btn" onClick={onToggleMinimize}>
+            <Maximize2 size={16} />
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="video-call-overlay">
@@ -361,6 +419,11 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
           <button className="call-control-btn" onClick={() => setShowFilters(!showFilters)} title="Эффекты">
             <Sparkles size={24} />
           </button>
+          {onToggleMinimize && (
+            <button className="call-control-btn" onClick={onToggleMinimize} title="Свернуть">
+              <Minimize2 size={24} />
+            </button>
+          )}
           <button className="call-control-btn end-call" onClick={endCall}>
             <PhoneOff size={24} />
           </button>

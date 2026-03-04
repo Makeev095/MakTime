@@ -7,6 +7,7 @@ import { Search, LogOut, Plus, MessageCircle, Settings, X, Users, Mail, MessageS
 import type { Conversation, User, StoryUser } from '../types';
 
 type SidebarTab = 'all' | 'unread' | 'contacts';
+type MobileTab = 'chats' | 'contacts' | 'settings';
 
 interface Props {
   activeConversationId: string | null;
@@ -14,9 +15,10 @@ interface Props {
   onViewStories: (users: StoryUser[], startIdx: number) => void;
   onAddStory: () => void;
   refreshKey: number;
+  mobileTab?: MobileTab;
 }
 
-export default function Sidebar({ activeConversationId, onSelectConversation, onViewStories, onAddStory, refreshKey }: Props) {
+export default function Sidebar({ activeConversationId, onSelectConversation, onViewStories, onAddStory, refreshKey, mobileTab }: Props) {
   const { user, token, logout } = useAuth();
   const { socket, onConversationCreated } = useSocket();
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -30,6 +32,11 @@ export default function Sidebar({ activeConversationId, onSelectConversation, on
   const [activeTab, setActiveTab] = useState<SidebarTab>('all');
   const activeConvRef = useRef(activeConversationId);
   activeConvRef.current = activeConversationId;
+
+  const isSettingsTab = mobileTab === 'settings';
+  const isContactsTab = mobileTab === 'contacts';
+  const effectiveShowProfile = showProfile || isSettingsTab;
+  const effectiveTab = isContactsTab ? 'contacts' as SidebarTab : activeTab;
 
   const fetchConversations = useCallback(async () => {
     const res = await fetch('/api/conversations', {
@@ -102,9 +109,10 @@ export default function Sidebar({ activeConversationId, onSelectConversation, on
   }, [searchQuery, token]);
 
   const filteredConversations = useMemo(() => {
-    if (activeTab === 'unread') return conversations.filter((c) => c.unreadCount > 0);
+    const tab = isContactsTab ? 'contacts' : activeTab;
+    if (tab === 'unread') return conversations.filter((c) => c.unreadCount > 0);
     return conversations;
-  }, [conversations, activeTab]);
+  }, [conversations, activeTab, isContactsTab]);
 
   const unreadTotal = useMemo(() =>
     conversations.reduce((sum, c) => sum + c.unreadCount, 0),
@@ -240,120 +248,162 @@ export default function Sidebar({ activeConversationId, onSelectConversation, on
         </div>
       )}
 
-      <StoryBar onViewStories={onViewStories} onAddStory={onAddStory} />
+      {!isSettingsTab && (
+        <>
+          <StoryBar onViewStories={onViewStories} onAddStory={onAddStory} />
 
-      <div className="sidebar-tabs">
-        <button
-          className={`sidebar-tab ${activeTab === 'all' ? 'active' : ''}`}
-          onClick={() => setActiveTab('all')}
-        >
-          <MessageSquare size={16} />
-          <span>Все</span>
-        </button>
-        <button
-          className={`sidebar-tab ${activeTab === 'unread' ? 'active' : ''}`}
-          onClick={() => setActiveTab('unread')}
-        >
-          <Mail size={16} />
-          <span>Непрочитанные</span>
-          {unreadTotal > 0 && <span className="tab-badge">{unreadTotal}</span>}
-        </button>
-        <button
-          className={`sidebar-tab ${activeTab === 'contacts' ? 'active' : ''}`}
-          onClick={() => setActiveTab('contacts')}
-        >
-          <Users size={16} />
-          <span>Контакты</span>
-        </button>
-      </div>
-
-      <div className="sidebar-content">
-        {showSearch && searchResults.length > 0 && (
-          <div className="search-results">
-            <div className="section-label">Пользователи</div>
-            {searchResults.map((u) => (
-              <button key={u.id} className="contact-item" onClick={() => startConversation(u.id)}>
-                <div className="avatar" style={{ background: u.avatarColor }}>
-                  {u.displayName[0].toUpperCase()}
-                </div>
-                <div className="contact-info">
-                  <span className="contact-name">{u.displayName}</span>
-                  <span className="contact-username">@{u.username}</span>
-                </div>
-              </button>
-            ))}
+          <div className="sidebar-tabs">
+            <button
+              className={`sidebar-tab ${effectiveTab === 'all' ? 'active' : ''}`}
+              onClick={() => setActiveTab('all')}
+            >
+              <MessageSquare size={16} />
+              <span>Все</span>
+            </button>
+            <button
+              className={`sidebar-tab ${effectiveTab === 'unread' ? 'active' : ''}`}
+              onClick={() => setActiveTab('unread')}
+            >
+              <Mail size={16} />
+              <span>Непрочитанные</span>
+              {unreadTotal > 0 && <span className="tab-badge">{unreadTotal}</span>}
+            </button>
+            <button
+              className={`sidebar-tab ${effectiveTab === 'contacts' ? 'active' : ''}`}
+              onClick={() => setActiveTab('contacts')}
+            >
+              <Users size={16} />
+              <span>Контакты</span>
+            </button>
           </div>
-        )}
 
-        {activeTab === 'contacts' ? (
-          <div className="contacts-list">
-            {contacts.length === 0 ? (
-              <div className="no-conversations">
-                <p>Нет контактов</p>
-                <p className="hint">Найдите собеседника через поиск</p>
-              </div>
-            ) : contacts.map((ct) => (
-              <button key={ct.id} className="contact-item" onClick={() => startConversation(ct.id)}>
-                <div className="avatar" style={{ background: ct.avatarColor }}>
-                  {ct.displayName[0].toUpperCase()}
-                  {ct.status === 'online' && <span className="online-dot" />}
-                </div>
-                <div className="contact-info">
-                  <span className="contact-name">{ct.displayName}</span>
-                  <span className="contact-username">@{ct.username}</span>
-                </div>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div className="conversations-list">
-            {filteredConversations.length === 0 && !showSearch && (
-              <div className="no-conversations">
-                <p>{activeTab === 'unread' ? 'Нет непрочитанных' : 'Нет чатов'}</p>
-                <p className="hint">
-                  {activeTab === 'unread' ? 'Все сообщения прочитаны' : 'Нажмите + чтобы найти собеседника'}
-                </p>
+          <div className="sidebar-content">
+            {showSearch && searchResults.length > 0 && (
+              <div className="search-results">
+                <div className="section-label">Пользователи</div>
+                {searchResults.map((u) => (
+                  <button key={u.id} className="contact-item" onClick={() => startConversation(u.id)}>
+                    <div className="avatar" style={{ background: u.avatarColor }}>
+                      {u.displayName[0].toUpperCase()}
+                    </div>
+                    <div className="contact-info">
+                      <span className="contact-name">{u.displayName}</span>
+                      <span className="contact-username">@{u.username}</span>
+                    </div>
+                  </button>
+                ))}
               </div>
             )}
 
-            {filteredConversations.map((conv) => (
-              <button
-                key={conv.id}
-                className={`conversation-item ${activeConversationId === conv.id ? 'active' : ''}`}
-                onClick={() => onSelectConversation(conv)}
-              >
-                <div className="avatar" style={{ background: conv.participant?.avatarColor || '#999' }}>
-                  {conv.participant?.displayName?.[0]?.toUpperCase() || '?'}
-                  {conv.participant?.status === 'online' && <span className="online-dot" />}
-                </div>
-                <div className="conversation-info">
-                  <div className="conversation-top">
-                    <span className="conversation-name">
-                      {conv.participant?.displayName || 'Пользователь'}
-                    </span>
-                    <span className="conversation-time">
-                      {formatTime(conv.lastMessageTime)}
-                    </span>
+            {effectiveTab === 'contacts' ? (
+              <div className="contacts-list">
+                {contacts.length === 0 ? (
+                  <div className="no-conversations">
+                    <p>Нет контактов</p>
+                    <p className="hint">Найдите собеседника через поиск</p>
                   </div>
-                  <div className="conversation-bottom">
-                    <span className="conversation-preview">{lastMsgPreview(conv)}</span>
-                    {conv.unreadCount > 0 && (
-                      <span className="unread-badge">{conv.unreadCount}</span>
-                    )}
+                ) : contacts.map((ct) => (
+                  <button key={ct.id} className="contact-item" onClick={() => startConversation(ct.id)}>
+                    <div className="avatar" style={{ background: ct.avatarColor }}>
+                      {ct.displayName[0].toUpperCase()}
+                      {ct.status === 'online' && <span className="online-dot" />}
+                    </div>
+                    <div className="contact-info">
+                      <span className="contact-name">{ct.displayName}</span>
+                      <span className="contact-username">@{ct.username}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="conversations-list">
+                {filteredConversations.length === 0 && !showSearch && (
+                  <div className="no-conversations">
+                    <p>{effectiveTab === 'unread' ? 'Нет непрочитанных' : 'Нет чатов'}</p>
+                    <p className="hint">
+                      {effectiveTab === 'unread' ? 'Все сообщения прочитаны' : 'Нажмите + чтобы найти собеседника'}
+                    </p>
                   </div>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+                )}
 
-      <div className="sidebar-footer">
-        <div className="avatar small" style={{ background: user?.avatarColor }}>
-          {user?.displayName?.[0]?.toUpperCase()}
+                {filteredConversations.map((conv) => (
+                  <button
+                    key={conv.id}
+                    className={`conversation-item ${activeConversationId === conv.id ? 'active' : ''}`}
+                    onClick={() => onSelectConversation(conv)}
+                  >
+                    <div className="avatar" style={{ background: conv.participant?.avatarColor || '#999' }}>
+                      {conv.participant?.displayName?.[0]?.toUpperCase() || '?'}
+                      {conv.participant?.status === 'online' && <span className="online-dot" />}
+                    </div>
+                    <div className="conversation-info">
+                      <div className="conversation-top">
+                        <span className="conversation-name">
+                          {conv.participant?.displayName || 'Пользователь'}
+                        </span>
+                        <span className="conversation-time">
+                          {formatTime(conv.lastMessageTime)}
+                        </span>
+                      </div>
+                      <div className="conversation-bottom">
+                        <span className="conversation-preview">{lastMsgPreview(conv)}</span>
+                        {conv.unreadCount > 0 && (
+                          <span className="unread-badge">{conv.unreadCount}</span>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {isSettingsTab && (
+        <div className="settings-page">
+          <div className="profile-panel" style={{ borderBottom: 'none' }}>
+            <div className="profile-avatar" style={{ background: user?.avatarColor }}>
+              {user?.displayName?.[0]?.toUpperCase()}
+            </div>
+            <div className="profile-username">@{user?.username}</div>
+            <div className="input-group" style={{ margin: '8px 0', width: '100%' }}>
+              <input
+                type="text"
+                placeholder="Отображаемое имя"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+              />
+            </div>
+            <div className="input-group" style={{ margin: '8px 0', width: '100%' }}>
+              <input
+                type="text"
+                placeholder="О себе..."
+                value={bio}
+                onChange={(e) => setBio(e.target.value)}
+              />
+            </div>
+            <button className="auth-submit" style={{ width: '100%', padding: '10px' }} onClick={saveProfile}>
+              Сохранить
+            </button>
+          </div>
+          <div style={{ padding: '0 16px' }}>
+            <button className="logout-btn" onClick={logout}>
+              <LogOut size={18} />
+              <span>Выйти из аккаунта</span>
+            </button>
+          </div>
         </div>
-        <span className="current-user-name">{user?.displayName}</span>
-      </div>
+      )}
+
+      {!isSettingsTab && (
+        <div className="sidebar-footer desktop-only">
+          <div className="avatar small" style={{ background: user?.avatarColor }}>
+            {user?.displayName?.[0]?.toUpperCase()}
+          </div>
+          <span className="current-user-name">{user?.displayName}</span>
+        </div>
+      )}
     </div>
   );
 }

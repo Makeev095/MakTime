@@ -429,6 +429,37 @@ input, button, textarea { font-family: inherit; font-size: inherit; }
 }
 .emoji-item:hover { background: var(--bg-hover); transform: scale(1.2); }
 
+/* ===== Mobile Tab Bar ===== */
+.mobile-tab-bar {
+  display: none; position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--bg-secondary); border-top: 1px solid var(--border);
+  z-index: 100; padding-bottom: env(safe-area-inset-bottom);
+}
+@media (max-width: 768px) {
+  .mobile-tab-bar { display: flex; }
+  .sidebar-tabs { display: none; }
+  .sidebar-footer.desktop-only { display: none; }
+  .sidebar { padding-bottom: 56px; }
+}
+.mobile-tab {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  gap: 2px; padding: 8px 4px; border: none; background: transparent;
+  color: var(--text-muted); font-size: 11px; font-weight: 500; cursor: pointer;
+  transition: var(--transition);
+}
+.mobile-tab.active { color: var(--accent); }
+.mobile-tab svg { flex-shrink: 0; }
+
+/* Settings page */
+.settings-page { flex: 1; overflow-y: auto; }
+.logout-btn {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 14px 16px; border: none; background: rgba(249, 65, 68, 0.1);
+  color: var(--danger); border-radius: var(--radius); cursor: pointer;
+  font-size: 15px; font-weight: 500; transition: var(--transition); margin-top: 16px;
+}
+.logout-btn:hover { background: rgba(249, 65, 68, 0.2); }
+
 /* ===== Video Call ===== */
 .video-call-overlay { position: fixed; inset: 0; z-index: 1000; background: #000; }
 .video-call { position: relative; width: 100%; height: 100%; display: flex; flex-direction: column; }
@@ -476,6 +507,44 @@ input, button, textarea { font-family: inherit; font-size: inherit; }
 }
 .filter-btn:hover { background: rgba(255,255,255,0.1); }
 .filter-btn.active { background: var(--accent); border-color: var(--accent); }
+
+/* ===== Video Call PiP ===== */
+.video-call-pip {
+  position: fixed; bottom: 80px; right: 16px; z-index: 900;
+  width: 160px; height: 220px; border-radius: 16px; overflow: hidden;
+  background: #111; box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  cursor: pointer; border: 2px solid rgba(255,255,255,0.15);
+  display: flex; flex-direction: column;
+  transition: transform 0.2s ease;
+}
+.video-call-pip:hover { transform: scale(1.03); }
+.pip-remote-video { width: 100%; flex: 1; object-fit: cover; background: #000; }
+.pip-info {
+  position: absolute; top: 0; left: 0; right: 0;
+  padding: 6px 8px; background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
+  display: flex; flex-direction: column;
+}
+.pip-name { font-size: 11px; font-weight: 600; color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pip-status { font-size: 10px; color: rgba(255,255,255,0.6); }
+.pip-actions {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  display: flex; justify-content: center; gap: 8px; padding: 6px;
+  background: linear-gradient(to top, rgba(0,0,0,0.7), transparent);
+}
+.pip-btn {
+  width: 32px; height: 32px; border-radius: 50%; border: none;
+  background: rgba(255,255,255,0.2); color: white;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: var(--transition);
+}
+.pip-btn:hover { background: rgba(255,255,255,0.35); }
+.pip-btn.active { background: rgba(255,255,255,0.35); }
+.pip-btn.end { background: var(--danger); }
+.pip-btn.end:hover { background: #d63538; }
+
+@media (max-width: 768px) {
+  .video-call-pip { bottom: 70px; right: 8px; width: 130px; height: 180px; }
+}
 
 /* ===== Incoming Call ===== */
 .incoming-call-overlay {
