@@ -82,6 +82,7 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
     if (!socket) return;
 
     let mounted = true;
+    let ended = false;
 
     const doClean = () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -95,12 +96,24 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
       hasRemoteDesc.current = false;
       iceRestartCount.current = 0;
       iceCandidateQueue.current = [];
-      setIncomingCall(null);
     };
 
     const doEnd = () => {
+      if (ended) return;
+      ended = true;
       socket.emit('call:end', { to: targetUserId });
+      removeListeners();
       doClean();
+      setIncomingCall(null);
+      onEndRef.current();
+    };
+
+    const doEndRemote = () => {
+      if (ended) return;
+      ended = true;
+      removeListeners();
+      doClean();
+      setIncomingCall(null);
       onEndRef.current();
     };
 
@@ -113,6 +126,82 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
         try { await pc.addIceCandidate(new RTCIceCandidate(c)); }
         catch (e) { console.warn('[WebRTC] ICE candidate error:', e); }
       }
+    };
+
+    const onAccepted = async (data: { from: string }) => {
+      if (!mounted || data.from !== targetUserId) return;
+      if (callTimeoutRef.current) clearTimeout(callTimeoutRef.current);
+      setStatus('connecting');
+      const pc = pcRef.current;
+      if (!pc) return;
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('webrtc:offer', { to: targetUserId, offer });
+      } catch (e) { console.error('[WebRTC] Offer error:', e); }
+    };
+
+    const onRejected = () => {
+      if (!mounted) return;
+      if (callTimeoutRef.current) clearTimeout(callTimeoutRef.current);
+      setStatus('rejected');
+      setTimeout(() => doEndRemote(), 2000);
+    };
+
+    const onOffer = async (data: { from: string; offer: RTCSessionDescriptionInit }) => {
+      if (!mounted || data.from !== targetUserId) return;
+      const pc = pcRef.current;
+      if (!pc) return;
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        hasRemoteDesc.current = true;
+        await processQueue(pc);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit('webrtc:answer', { to: targetUserId, answer });
+      } catch (e) { console.error('[WebRTC] Answer error:', e); }
+    };
+
+    const onAnswer = async (data: { from: string; answer: RTCSessionDescriptionInit }) => {
+      if (!mounted || data.from !== targetUserId) return;
+      const pc = pcRef.current;
+      if (!pc) return;
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        hasRemoteDesc.current = true;
+        await processQueue(pc);
+      } catch (e) { console.error('[WebRTC] Remote desc error:', e); }
+    };
+
+    const onIce = async (data: { from: string; candidate: RTCIceCandidateInit }) => {
+      if (!mounted || data.from !== targetUserId) return;
+      const pc = pcRef.current;
+      if (!pc) return;
+      if (hasRemoteDesc.current) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+        catch (e) { console.warn('[WebRTC] ICE error:', e); }
+      } else {
+        iceCandidateQueue.current.push(data.candidate);
+      }
+    };
+
+    const onEnded = () => { if (mounted) doEndRemote(); };
+
+    const onUnavailable = () => {
+      if (!mounted) return;
+      if (callTimeoutRef.current) clearTimeout(callTimeoutRef.current);
+      setStatus('unavailable');
+      setTimeout(() => doEndRemote(), 2000);
+    };
+
+    const removeListeners = () => {
+      socket.off('call:accepted', onAccepted);
+      socket.off('call:rejected', onRejected);
+      socket.off('webrtc:offer', onOffer);
+      socket.off('webrtc:answer', onAnswer);
+      socket.off('webrtc:ice-candidate', onIce);
+      socket.off('call:ended', onEnded);
+      socket.off('call:unavailable', onUnavailable);
     };
 
     const setupCall = async () => {
@@ -136,6 +225,7 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
             remoteStreamRef.current = event.streams[0];
             if (remoteVideoRef.current) {
               remoteVideoRef.current.srcObject = event.streams[0];
+              remoteVideoRef.current.play().catch(() => {});
             }
           }
         };
@@ -180,13 +270,13 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
           }
         };
 
-        const createAndSendOffer = async () => {
-          try {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            socket.emit('webrtc:offer', { to: targetUserId, offer });
-          } catch (e) { console.error('[WebRTC] Offer error:', e); }
-        };
+        socket.on('call:accepted', onAccepted);
+        socket.on('call:rejected', onRejected);
+        socket.on('webrtc:offer', onOffer);
+        socket.on('webrtc:answer', onAnswer);
+        socket.on('webrtc:ice-candidate', onIce);
+        socket.on('call:ended', onEnded);
+        socket.on('call:unavailable', onUnavailable);
 
         if (isInitiator) {
           socket.emit('call:initiate', {
@@ -203,67 +293,6 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
           socket.emit('call:accept', { to: targetUserId });
         }
 
-        const onAccepted = async (data: { from: string }) => {
-          if (!mounted || data.from !== targetUserId) return;
-          if (callTimeoutRef.current) clearTimeout(callTimeoutRef.current);
-          setStatus('connecting');
-          await createAndSendOffer();
-        };
-
-        const onRejected = () => {
-          if (!mounted) return;
-          if (callTimeoutRef.current) clearTimeout(callTimeoutRef.current);
-          setStatus('rejected');
-          setTimeout(() => doEnd(), 2000);
-        };
-
-        const onOffer = async (data: { from: string; offer: RTCSessionDescriptionInit }) => {
-          if (!mounted || data.from !== targetUserId) return;
-          try {
-            await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-            hasRemoteDesc.current = true;
-            await processQueue(pc);
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            socket.emit('webrtc:answer', { to: targetUserId, answer });
-          } catch (e) { console.error('[WebRTC] Answer error:', e); }
-        };
-
-        const onAnswer = async (data: { from: string; answer: RTCSessionDescriptionInit }) => {
-          if (!mounted || data.from !== targetUserId) return;
-          try {
-            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-            hasRemoteDesc.current = true;
-            await processQueue(pc);
-          } catch (e) { console.error('[WebRTC] Remote desc error:', e); }
-        };
-
-        const onIce = async (data: { from: string; candidate: RTCIceCandidateInit }) => {
-          if (!mounted || data.from !== targetUserId) return;
-          if (hasRemoteDesc.current) {
-            try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
-            catch (e) { console.warn('[WebRTC] ICE error:', e); }
-          } else {
-            iceCandidateQueue.current.push(data.candidate);
-          }
-        };
-
-        const onEnded = () => { if (mounted) doEnd(); };
-        const onUnavailable = () => {
-          if (!mounted) return;
-          if (callTimeoutRef.current) clearTimeout(callTimeoutRef.current);
-          setStatus('unavailable');
-          setTimeout(() => doEnd(), 2000);
-        };
-
-        socket.on('call:accepted', onAccepted);
-        socket.on('call:rejected', onRejected);
-        socket.on('webrtc:offer', onOffer);
-        socket.on('webrtc:answer', onAnswer);
-        socket.on('webrtc:ice-candidate', onIce);
-        socket.on('call:ended', onEnded);
-        socket.on('call:unavailable', onUnavailable);
-
       } catch (err) {
         console.error('[WebRTC] Call setup failed:', err);
         if (!mounted) return;
@@ -276,14 +305,11 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
 
     return () => {
       mounted = false;
-      doClean();
-      socket.off('call:accepted');
-      socket.off('call:rejected');
-      socket.off('call:ended');
-      socket.off('call:unavailable');
-      socket.off('webrtc:offer');
-      socket.off('webrtc:answer');
-      socket.off('webrtc:ice-candidate');
+      if (!ended) {
+        removeListeners();
+        doClean();
+        setIncomingCall(null);
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
