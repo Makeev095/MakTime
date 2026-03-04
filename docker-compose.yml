@@ -43,6 +43,7 @@ services:
       --lt-cred-mech
       --user=${TURN_USER:-maktime}:${TURN_PASS:-MakTimeT0rn2026!}
       --realm=${TURN_REALM:-maktime.space}
+      --external-ip=${EXTERNAL_IP:-89.44.87.212}
       --fingerprint
       --no-tls
       --no-dtls
@@ -50,6 +51,7 @@ services:
       --min-port=49152
       --max-port=49252
       --log-file=stdout
+      --verbose
 
 volumes:
   maktime-db:

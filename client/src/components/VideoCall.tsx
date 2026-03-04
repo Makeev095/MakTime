@@ -71,48 +71,54 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
   const iceCandidateQueue = useRef<RTCIceCandidateInit[]>([]);
   const hasRemoteDesc = useRef(false);
 
-  const cleanup = useCallback(() => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    if (callTimeoutRef.current) clearTimeout(callTimeoutRef.current);
-    localStreamRef.current?.getTracks().forEach((t) => t.stop());
-    pcRef.current?.close();
-    pcRef.current = null;
-    localStreamRef.current = null;
-    remoteStreamRef.current = null;
-    hasRemoteDesc.current = false;
-    iceRestartCount.current = 0;
-    iceCandidateQueue.current = [];
-    setIncomingCall(null);
-  }, [setIncomingCall]);
+  const onEndRef = useRef(onEnd);
+  onEndRef.current = onEnd;
 
-  const endCall = useCallback(() => {
-    socket?.emit('call:end', { to: targetUserId });
-    cleanup();
-    onEnd();
-  }, [socket, targetUserId, cleanup, onEnd]);
+  const endCallRef = useRef<() => void>(() => {});
 
-  const processIceQueue = useCallback(async () => {
-    const pc = pcRef.current;
-    if (!pc || !hasRemoteDesc.current) return;
-    while (iceCandidateQueue.current.length > 0) {
-      const candidate = iceCandidateQueue.current.shift()!;
-      try {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (e) {
-        console.warn('ICE candidate error:', e);
-      }
-    }
-  }, []);
+  const endCall = useCallback(() => { endCallRef.current(); }, []);
 
   useEffect(() => {
     if (!socket) return;
 
     let mounted = true;
 
+    const doClean = () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      timerRef.current = undefined;
+      if (callTimeoutRef.current) clearTimeout(callTimeoutRef.current);
+      localStreamRef.current?.getTracks().forEach((t) => t.stop());
+      pcRef.current?.close();
+      pcRef.current = null;
+      localStreamRef.current = null;
+      remoteStreamRef.current = null;
+      hasRemoteDesc.current = false;
+      iceRestartCount.current = 0;
+      iceCandidateQueue.current = [];
+      setIncomingCall(null);
+    };
+
+    const doEnd = () => {
+      socket.emit('call:end', { to: targetUserId });
+      doClean();
+      onEndRef.current();
+    };
+
+    endCallRef.current = doEnd;
+
+    const processQueue = async (pc: RTCPeerConnection) => {
+      if (!hasRemoteDesc.current) return;
+      while (iceCandidateQueue.current.length > 0) {
+        const c = iceCandidateQueue.current.shift()!;
+        try { await pc.addIceCandidate(new RTCIceCandidate(c)); }
+        catch (e) { console.warn('[WebRTC] ICE candidate error:', e); }
+      }
+    };
+
     const setupCall = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: isFrontCamera ? 'user' : 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
         if (!mounted) { stream.getTracks().forEach((t) => t.stop()); return; }
@@ -143,16 +149,15 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
         pc.oniceconnectionstatechange = () => {
           if (!mounted) return;
           const state = pc.iceConnectionState;
-          console.log('[WebRTC] ICE connection state:', state);
+          console.log('[WebRTC] ICE state:', state);
           if (state === 'failed' && iceRestartCount.current < 3) {
             iceRestartCount.current++;
-            console.log('[WebRTC] Restarting ICE, attempt:', iceRestartCount.current);
             pc.restartIce();
             if (isInitiator && pc.localDescription) {
               pc.createOffer({ iceRestart: true }).then((offer) => {
                 pc.setLocalDescription(offer);
                 socket.emit('webrtc:offer', { to: targetUserId, offer });
-              }).catch((e) => console.error('[WebRTC] ICE restart offer error:', e));
+              }).catch(() => {});
             }
           }
         };
@@ -167,10 +172,10 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
               timerRef.current = window.setInterval(() => setDuration((d) => d + 1), 1000);
             }
           } else if (pc.connectionState === 'failed') {
-            if (iceRestartCount.current >= 3) endCall();
+            if (iceRestartCount.current >= 3) doEnd();
           } else if (pc.connectionState === 'disconnected') {
             setTimeout(() => {
-              if (pcRef.current?.connectionState === 'disconnected') endCall();
+              if (pcRef.current?.connectionState === 'disconnected') doEnd();
             }, 5000);
           }
         };
@@ -190,51 +195,50 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
             callerName: user?.displayName || '',
           });
           callTimeoutRef.current = window.setTimeout(() => {
-            if (mounted && (status === 'calling' || status === 'connecting')) {
-              setStatus('unavailable');
-              setTimeout(() => { cleanup(); onEnd(); }, 2000);
-            }
+            if (!mounted) return;
+            setStatus('unavailable');
+            setTimeout(() => doEnd(), 2000);
           }, 30000);
         } else {
           socket.emit('call:accept', { to: targetUserId });
         }
 
-        socket.on('call:accepted', async (data: { from: string }) => {
+        const onAccepted = async (data: { from: string }) => {
           if (!mounted || data.from !== targetUserId) return;
           if (callTimeoutRef.current) clearTimeout(callTimeoutRef.current);
           setStatus('connecting');
           await createAndSendOffer();
-        });
+        };
 
-        socket.on('call:rejected', () => {
+        const onRejected = () => {
           if (!mounted) return;
           if (callTimeoutRef.current) clearTimeout(callTimeoutRef.current);
           setStatus('rejected');
-          setTimeout(() => { cleanup(); onEnd(); }, 2000);
-        });
+          setTimeout(() => doEnd(), 2000);
+        };
 
-        socket.on('webrtc:offer', async (data: { from: string; offer: RTCSessionDescriptionInit }) => {
+        const onOffer = async (data: { from: string; offer: RTCSessionDescriptionInit }) => {
           if (!mounted || data.from !== targetUserId) return;
           try {
             await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
             hasRemoteDesc.current = true;
-            await processIceQueue();
+            await processQueue(pc);
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             socket.emit('webrtc:answer', { to: targetUserId, answer });
           } catch (e) { console.error('[WebRTC] Answer error:', e); }
-        });
+        };
 
-        socket.on('webrtc:answer', async (data: { from: string; answer: RTCSessionDescriptionInit }) => {
+        const onAnswer = async (data: { from: string; answer: RTCSessionDescriptionInit }) => {
           if (!mounted || data.from !== targetUserId) return;
           try {
             await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
             hasRemoteDesc.current = true;
-            await processIceQueue();
+            await processQueue(pc);
           } catch (e) { console.error('[WebRTC] Remote desc error:', e); }
-        });
+        };
 
-        socket.on('webrtc:ice-candidate', async (data: { from: string; candidate: RTCIceCandidateInit }) => {
+        const onIce = async (data: { from: string; candidate: RTCIceCandidateInit }) => {
           if (!mounted || data.from !== targetUserId) return;
           if (hasRemoteDesc.current) {
             try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
@@ -242,21 +246,29 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
           } else {
             iceCandidateQueue.current.push(data.candidate);
           }
-        });
+        };
 
-        socket.on('call:ended', () => { if (mounted) { cleanup(); onEnd(); } });
-        socket.on('call:unavailable', () => {
+        const onEnded = () => { if (mounted) doEnd(); };
+        const onUnavailable = () => {
           if (!mounted) return;
           if (callTimeoutRef.current) clearTimeout(callTimeoutRef.current);
           setStatus('unavailable');
-          setTimeout(() => { cleanup(); onEnd(); }, 2000);
-        });
+          setTimeout(() => doEnd(), 2000);
+        };
+
+        socket.on('call:accepted', onAccepted);
+        socket.on('call:rejected', onRejected);
+        socket.on('webrtc:offer', onOffer);
+        socket.on('webrtc:answer', onAnswer);
+        socket.on('webrtc:ice-candidate', onIce);
+        socket.on('call:ended', onEnded);
+        socket.on('call:unavailable', onUnavailable);
 
       } catch (err) {
         console.error('[WebRTC] Call setup failed:', err);
         if (!mounted) return;
         setStatus('error');
-        setTimeout(() => { cleanup(); onEnd(); }, 3000);
+        setTimeout(() => doEnd(), 3000);
       }
     };
 
@@ -264,7 +276,7 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
 
     return () => {
       mounted = false;
-      cleanup();
+      doClean();
       socket.off('call:accepted');
       socket.off('call:rejected');
       socket.off('call:ended');
@@ -273,6 +285,7 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
       socket.off('webrtc:answer');
       socket.off('webrtc:ice-candidate');
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggleMute = () => {

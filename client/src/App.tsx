@@ -42,6 +42,12 @@ export default function App() {
 
   const handleStartCall = useCallback((userId: string, name: string, conversationId: string) => {
     setCallTarget({ userId, name, conversationId, isInitiator: true });
+    setCallMinimized(false);
+  }, []);
+
+  const handleEndCall = useCallback(() => {
+    setCallTarget(null);
+    setCallMinimized(false);
   }, []);
 
   if (loading) {
@@ -130,7 +136,7 @@ export default function App() {
           targetName={callTarget.name}
           conversationId={callTarget.conversationId}
           isInitiator={callTarget.isInitiator}
-          onEnd={() => { setCallTarget(null); setCallMinimized(false); }}
+          onEnd={handleEndCall}
           minimized={callMinimized}
           onToggleMinimize={() => setCallMinimized((m) => !m)}
         />
