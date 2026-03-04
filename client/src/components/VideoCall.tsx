@@ -64,6 +64,7 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<number>();
   const callTimeoutRef = useRef<number>();
   const iceRestartCount = useRef(0);
@@ -77,6 +78,7 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
     pcRef.current?.close();
     pcRef.current = null;
     localStreamRef.current = null;
+    remoteStreamRef.current = null;
     hasRemoteDesc.current = false;
     iceRestartCount.current = 0;
     iceCandidateQueue.current = [];
@@ -124,8 +126,11 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
         pc.ontrack = (event) => {
-          if (remoteVideoRef.current && event.streams[0]) {
-            remoteVideoRef.current.srcObject = event.streams[0];
+          if (event.streams[0]) {
+            remoteStreamRef.current = event.streams[0];
+            if (remoteVideoRef.current) {
+              remoteVideoRef.current.srcObject = event.streams[0];
+            }
           }
         };
 
@@ -269,6 +274,17 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
       socket.off('webrtc:ice-candidate');
     };
   }, []);
+
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      if (remoteVideoRef.current && remoteStreamRef.current) {
+        remoteVideoRef.current.srcObject = remoteStreamRef.current;
+      }
+      if (localVideoRef.current && localStreamRef.current) {
+        localVideoRef.current.srcObject = localStreamRef.current;
+      }
+    });
+  }, [minimized]);
 
   const toggleMute = () => {
     const track = localStreamRef.current?.getAudioTracks()[0];
