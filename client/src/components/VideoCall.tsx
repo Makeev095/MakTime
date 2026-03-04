@@ -275,17 +275,6 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
     };
   }, []);
 
-  useEffect(() => {
-    requestAnimationFrame(() => {
-      if (remoteVideoRef.current && remoteStreamRef.current) {
-        remoteVideoRef.current.srcObject = remoteStreamRef.current;
-      }
-      if (localVideoRef.current && localStreamRef.current) {
-        localVideoRef.current.srcObject = localStreamRef.current;
-      }
-    });
-  }, [minimized]);
-
   const toggleMute = () => {
     const track = localStreamRef.current?.getAudioTracks()[0];
     if (track) { track.enabled = !track.enabled; setIsMuted(!track.enabled); }
@@ -359,56 +348,41 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
 
   const currentFilter = VIDEO_FILTERS[filterIdx].css;
 
-  if (minimized) {
-    return (
-      <div className="video-call-pip" onClick={onToggleMinimize}>
-        <video
-          ref={remoteVideoRef}
-          className="pip-remote-video"
-          autoPlay playsInline
-        />
-        <div className="pip-info">
-          <span className="pip-name">{targetName}</span>
-          <span className="pip-status">{statusText[status]}</span>
-        </div>
-        <div className="pip-actions" onClick={(e) => e.stopPropagation()}>
-          <button className={`pip-btn ${isMuted ? 'active' : ''}`} onClick={toggleMute}>
-            {isMuted ? <MicOff size={16} /> : <Mic size={16} />}
-          </button>
-          <button className="pip-btn end" onClick={endCall}>
-            <PhoneOff size={16} />
-          </button>
-          <button className="pip-btn" onClick={onToggleMinimize}>
-            <Maximize2 size={16} />
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="video-call-overlay">
+    <div
+      className={`video-call-overlay ${minimized ? 'pip-mode' : ''}`}
+      onClick={minimized ? onToggleMinimize : undefined}
+    >
       <div className="video-call">
         <video
           ref={remoteVideoRef}
           className="remote-video"
           autoPlay playsInline
-          style={{ filter: currentFilter }}
+          style={!minimized ? { filter: currentFilter } : undefined}
         />
 
-        <div className="call-top-bar">
-          <span className="call-name">{targetName}</span>
-          <span className="call-status">{statusText[status]}</span>
-        </div>
+        {!minimized && (
+          <div className="call-top-bar">
+            <span className="call-name">{targetName}</span>
+            <span className="call-status">{statusText[status]}</span>
+          </div>
+        )}
+
+        {minimized && (
+          <div className="pip-info">
+            <span className="pip-name">{targetName}</span>
+            <span className="pip-status">{statusText[status]}</span>
+          </div>
+        )}
 
         <video
           ref={localVideoRef}
           className="local-video"
           autoPlay playsInline muted
-          style={{ filter: currentFilter, transform: isFrontCamera ? 'scaleX(-1)' : 'none' }}
+          style={!minimized ? { filter: currentFilter, transform: isFrontCamera ? 'scaleX(-1)' : 'none' } : undefined}
         />
 
-        {showFilters && (
+        {!minimized && showFilters && (
           <div className="filter-panel">
             {VIDEO_FILTERS.map((f, i) => (
               <button
@@ -422,28 +396,42 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
           </div>
         )}
 
-        <div className="call-controls">
-          <button className={`call-control-btn ${isMuted ? 'active' : ''}`} onClick={toggleMute}>
-            {isMuted ? <MicOff size={24} /> : <Mic size={24} />}
-          </button>
-          <button className={`call-control-btn ${isVideoOff ? 'active' : ''}`} onClick={toggleVideo}>
-            {isVideoOff ? <VideoOff size={24} /> : <Video size={24} />}
-          </button>
-          <button className="call-control-btn" onClick={switchCamera} title="Сменить камеру">
-            <RotateCcw size={24} />
-          </button>
-          <button className="call-control-btn" onClick={() => setShowFilters(!showFilters)} title="Эффекты">
-            <Sparkles size={24} />
-          </button>
-          {onToggleMinimize && (
-            <button className="call-control-btn" onClick={onToggleMinimize} title="Свернуть">
-              <Minimize2 size={24} />
+        {minimized ? (
+          <div className="pip-actions" onClick={(e) => e.stopPropagation()}>
+            <button className={`pip-btn ${isMuted ? 'active' : ''}`} onClick={toggleMute}>
+              {isMuted ? <MicOff size={16} /> : <Mic size={16} />}
             </button>
-          )}
-          <button className="call-control-btn end-call" onClick={endCall}>
-            <PhoneOff size={24} />
-          </button>
-        </div>
+            <button className="pip-btn end" onClick={endCall}>
+              <PhoneOff size={16} />
+            </button>
+            <button className="pip-btn" onClick={onToggleMinimize}>
+              <Maximize2 size={16} />
+            </button>
+          </div>
+        ) : (
+          <div className="call-controls">
+            <button className={`call-control-btn ${isMuted ? 'active' : ''}`} onClick={toggleMute}>
+              {isMuted ? <MicOff size={24} /> : <Mic size={24} />}
+            </button>
+            <button className={`call-control-btn ${isVideoOff ? 'active' : ''}`} onClick={toggleVideo}>
+              {isVideoOff ? <VideoOff size={24} /> : <Video size={24} />}
+            </button>
+            <button className="call-control-btn" onClick={switchCamera} title="Сменить камеру">
+              <RotateCcw size={24} />
+            </button>
+            <button className="call-control-btn" onClick={() => setShowFilters(!showFilters)} title="Эффекты">
+              <Sparkles size={24} />
+            </button>
+            {onToggleMinimize && (
+              <button className="call-control-btn" onClick={onToggleMinimize} title="Свернуть">
+                <Minimize2 size={24} />
+              </button>
+            )}
+            <button className="call-control-btn end-call" onClick={endCall}>
+              <PhoneOff size={24} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
