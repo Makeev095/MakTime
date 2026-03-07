@@ -187,6 +187,42 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_stories_user ON stories(user_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_stories_expires ON stories(expires_at);
   CREATE INDEX IF NOT EXISTS idx_story_views ON story_views(story_id);
+
+  CREATE TABLE IF NOT EXISTS posts (
+    id TEXT PRIMARY KEY,
+    author_id TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'image',
+    file_url TEXT NOT NULL,
+    caption TEXT DEFAULT '',
+    likes_count INTEGER DEFAULT 0,
+    comments_count INTEGER DEFAULT 0,
+    reposts_count INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (author_id) REFERENCES users(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS post_likes (
+    post_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (post_id, user_id),
+    FOREIGN KEY (post_id) REFERENCES posts(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS post_comments (
+    id TEXT PRIMARY KEY,
+    post_id TEXT NOT NULL,
+    author_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (post_id) REFERENCES posts(id),
+    FOREIGN KEY (author_id) REFERENCES users(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_post_likes ON post_likes(post_id);
+  CREATE INDEX IF NOT EXISTS idx_post_comments ON post_comments(post_id);
 `);
 
 // Migrate existing DB — add columns if missing
@@ -315,6 +351,41 @@ const stmts = {
   ),
   cleanupOrphanedReactions: db.prepare(
     'DELETE FROM story_reactions WHERE story_id NOT IN (SELECT id FROM stories)'
+  ),
+
+  // Posts
+  createPost: db.prepare(
+    'INSERT INTO posts (id, author_id, type, file_url, caption) VALUES (?, ?, ?, ?, ?)'
+  ),
+  getPosts: db.prepare(`
+    SELECT p.*, u.display_name as author_name, u.avatar_color as author_avatar_color,
+      (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) as likes_count,
+      (SELECT COUNT(*) FROM post_comments pc WHERE pc.post_id = p.id) as comments_count,
+      0 as reposts_count
+    FROM posts p JOIN users u ON p.author_id = u.id
+    ORDER BY p.created_at DESC LIMIT ? OFFSET ?
+  `),
+  getPostsWithLike: db.prepare(`
+    SELECT p.*, u.display_name as author_name, u.avatar_color as author_avatar_color,
+      (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) as likes_count,
+      (SELECT COUNT(*) FROM post_comments pc WHERE pc.post_id = p.id) as comments_count,
+      0 as reposts_count,
+      (SELECT 1 FROM post_likes ul WHERE ul.post_id = p.id AND ul.user_id = ?) as is_liked
+    FROM posts p JOIN users u ON p.author_id = u.id
+    ORDER BY p.created_at DESC LIMIT ? OFFSET ?
+  `),
+  getPost: db.prepare('SELECT * FROM posts WHERE id = ?'),
+  deletePost: db.prepare('DELETE FROM posts WHERE id = ? AND author_id = ?'),
+  likePost: db.prepare('INSERT OR IGNORE INTO post_likes (post_id, user_id) VALUES (?, ?)'),
+  unlikePost: db.prepare('DELETE FROM post_likes WHERE post_id = ? AND user_id = ?'),
+  repostPost: db.prepare('UPDATE posts SET reposts_count = reposts_count + 1 WHERE id = ?'),
+  getPostComments: db.prepare(`
+    SELECT pc.*, u.display_name as author_name, u.avatar_color as author_avatar_color
+    FROM post_comments pc JOIN users u ON pc.author_id = u.id
+    WHERE pc.post_id = ? ORDER BY pc.created_at ASC
+  `),
+  addPostComment: db.prepare(
+    'INSERT INTO post_comments (id, post_id, author_id, text) VALUES (?, ?, ?, ?)'
   ),
 };
 
@@ -716,6 +787,106 @@ setInterval(() => {
     stmts.cleanupOrphanedReactions.run();
   } catch {}
 }, 10 * 60 * 1000);
+
+// --- Posts API ---
+app.get('/api/posts', authMiddleware, (req, res) => {
+  const userId = (req as any).userId;
+  const limit = Math.min(Number(req.query.limit) || 30, 100);
+  const offset = Number(req.query.offset) || 0;
+  const rows = stmts.getPostsWithLike.all(userId, limit, offset) as any[];
+  res.json(rows.map((p) => ({
+    id: p.id,
+    authorId: p.author_id,
+    authorName: p.author_name,
+    authorAvatarColor: p.author_avatar_color,
+    type: p.type,
+    fileUrl: p.file_url,
+    caption: p.caption || '',
+    likesCount: p.likes_count || 0,
+    commentsCount: p.comments_count || 0,
+    repostsCount: p.reposts_count || 0,
+    isLiked: !!p.is_liked,
+    createdAt: p.created_at,
+  })));
+});
+
+app.post('/api/posts', authMiddleware, (req, res) => {
+  const userId = (req as any).userId;
+  const { type, fileUrl, caption } = req.body;
+  if (!fileUrl) return res.status(400).json({ error: 'fileUrl required' });
+  if (fileUrl && !fileUrl.startsWith('/uploads/')) {
+    return res.status(400).json({ error: 'Invalid file URL' });
+  }
+  const id = uuidv4();
+  stmts.createPost.run(id, userId, type || 'image', fileUrl, sanitize(caption || ''));
+  const user = stmts.findUserById.get(userId) as any;
+  res.json({
+    id,
+    authorId: userId,
+    authorName: user?.display_name || '',
+    authorAvatarColor: user?.avatar_color || '#6C63FF',
+    type: type || 'image',
+    fileUrl,
+    caption: sanitize(caption || ''),
+    likesCount: 0,
+    commentsCount: 0,
+    repostsCount: 0,
+    isLiked: false,
+    createdAt: new Date().toISOString(),
+  });
+});
+
+app.post('/api/posts/:postId/like', authMiddleware, (req, res) => {
+  const userId = (req as any).userId;
+  stmts.likePost.run(req.params.postId, userId);
+  res.json({ ok: true });
+});
+
+app.delete('/api/posts/:postId/like', authMiddleware, (req, res) => {
+  const userId = (req as any).userId;
+  stmts.unlikePost.run(req.params.postId, userId);
+  res.json({ ok: true });
+});
+
+app.post('/api/posts/:postId/repost', authMiddleware, (req, res) => {
+  stmts.repostPost.run(req.params.postId);
+  res.json({ ok: true });
+});
+
+app.delete('/api/posts/:postId', authMiddleware, (req, res) => {
+  const userId = (req as any).userId;
+  stmts.deletePost.run(req.params.postId, userId);
+  res.json({ ok: true });
+});
+
+app.get('/api/posts/:postId/comments', authMiddleware, (req, res) => {
+  const rows = stmts.getPostComments.all(req.params.postId) as any[];
+  res.json(rows.map((c) => ({
+    id: c.id,
+    authorId: c.author_id,
+    authorName: c.author_name,
+    authorAvatarColor: c.author_avatar_color,
+    text: c.text,
+    createdAt: c.created_at,
+  })));
+});
+
+app.post('/api/posts/:postId/comments', authMiddleware, (req, res) => {
+  const userId = (req as any).userId;
+  const { text } = req.body;
+  if (!text?.trim()) return res.status(400).json({ error: 'text required' });
+  const id = uuidv4();
+  stmts.addPostComment.run(id, req.params.postId, userId, sanitize(text.trim()));
+  const user = stmts.findUserById.get(userId) as any;
+  res.json({
+    id,
+    authorId: userId,
+    authorName: user?.display_name || '',
+    authorAvatarColor: user?.avatar_color || '#6C63FF',
+    text: sanitize(text.trim()),
+    createdAt: new Date().toISOString(),
+  });
+});
 
 // --- Socket.IO ---
 const onlineUsers = new Map<string, string>();
