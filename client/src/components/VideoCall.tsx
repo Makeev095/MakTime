@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import {
-  PhoneOff, Mic, MicOff, Video, VideoOff, Sparkles, RotateCcw, Minimize2, Maximize2,
+  PhoneOff, Mic, MicOff, Video, VideoOff, Sparkles, RotateCcw, Minimize2, Maximize2, Volume2, VolumeX,
 } from 'lucide-react';
 
 interface Props {
@@ -55,6 +55,7 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
   const [status, setStatus] = useState(isInitiator ? 'calling' : 'connecting');
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
+  const [isSpeakerOn, setIsSpeakerOn] = useState(true);
   const [duration, setDuration] = useState(0);
   const [filterIdx, setFilterIdx] = useState(0);
   const [showFilters, setShowFilters] = useState(false);
@@ -225,6 +226,8 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
             remoteStreamRef.current = event.streams[0];
             if (remoteVideoRef.current) {
               remoteVideoRef.current.srcObject = event.streams[0];
+              remoteVideoRef.current.muted = false;
+              remoteVideoRef.current.volume = 1;
               remoteVideoRef.current.play().catch(() => {});
             }
           }
@@ -317,6 +320,27 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
   const toggleMute = () => {
     const track = localStreamRef.current?.getAudioTracks()[0];
     if (track) { track.enabled = !track.enabled; setIsMuted(!track.enabled); }
+  };
+
+  const toggleSpeaker = async () => {
+    const el = remoteVideoRef.current;
+    if (!el || typeof el.setSinkId !== 'function') {
+      setIsSpeakerOn((v) => !v);
+      return;
+    }
+    try {
+      if (isSpeakerOn) {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const outputs = devices.filter((d) => d.kind === 'audiooutput');
+        const other = outputs.find((d) => d.deviceId && d.deviceId !== 'default');
+        if (other) await el.setSinkId(other.deviceId);
+      } else {
+        await el.setSinkId('');
+      }
+      setIsSpeakerOn((v) => !v);
+    } catch {
+      setIsSpeakerOn((v) => !v);
+    }
   };
 
   const toggleVideo = () => {
@@ -440,6 +464,9 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
             <button className={`pip-btn ${isMuted ? 'active' : ''}`} onClick={toggleMute}>
               {isMuted ? <MicOff size={16} /> : <Mic size={16} />}
             </button>
+            <button className={`pip-btn ${!isSpeakerOn ? 'active' : ''}`} onClick={toggleSpeaker} title={isSpeakerOn ? 'Динамик' : 'Наушник'}>
+              {isSpeakerOn ? <Volume2 size={16} /> : <VolumeX size={16} />}
+            </button>
             <button className="pip-btn end" onClick={endCall}>
               <PhoneOff size={16} />
             </button>
@@ -454,6 +481,9 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
             </button>
             <button className={`call-control-btn ${isVideoOff ? 'active' : ''}`} onClick={toggleVideo}>
               {isVideoOff ? <VideoOff size={24} /> : <Video size={24} />}
+            </button>
+            <button className={`call-control-btn ${!isSpeakerOn ? 'active' : ''}`} onClick={toggleSpeaker} title={isSpeakerOn ? 'Динамик' : 'Наушник'}>
+              {isSpeakerOn ? <Volume2 size={24} /> : <VolumeX size={24} />}
             </button>
             <button className="call-control-btn" onClick={switchCamera} title="Сменить камеру">
               <RotateCcw size={24} />

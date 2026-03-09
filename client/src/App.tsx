@@ -1,15 +1,16 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, lazy, Suspense } from 'react';
 import { useAuth } from './context/AuthContext';
 import { useSocket } from './context/SocketContext';
 import AuthPage from './components/AuthPage';
 import Sidebar from './components/Sidebar';
-import ChatWindow from './components/ChatWindow';
-import VideoCall from './components/VideoCall';
-import IncomingCallModal from './components/IncomingCallModal';
-import StoryViewer from './components/StoryViewer';
-import StoryUpload from './components/StoryUpload';
 import { MessageCircle, Users, Settings } from 'lucide-react';
 import type { Conversation, StoryUser } from './types';
+
+const ChatWindow = lazy(() => import('./components/ChatWindow'));
+const VideoCall = lazy(() => import('./components/VideoCall'));
+const IncomingCallModal = lazy(() => import('./components/IncomingCallModal'));
+const StoryViewer = lazy(() => import('./components/StoryViewer'));
+const StoryUpload = lazy(() => import('./components/StoryUpload'));
 
 type MobileTab = 'chats' | 'contacts' | 'settings';
 
@@ -87,12 +88,14 @@ export default function App() {
 
       <div className={`main-container ${!showSidebar ? 'visible' : ''}`}>
         {activeConversation ? (
+          <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /></div>}>
           <ChatWindow
             conversation={activeConversation}
             onBack={() => setShowSidebar(true)}
             onStartCall={handleStartCall}
             onConversationUpdate={handleConversationUpdate}
           />
+          </Suspense>
         ) : (
           <div className="empty-state">
             <div className="empty-state-content">
@@ -131,6 +134,7 @@ export default function App() {
       )}
 
       {callTarget && (
+        <Suspense fallback={null}>
         <VideoCall
           targetUserId={callTarget.userId}
           targetName={callTarget.name}
@@ -140,25 +144,32 @@ export default function App() {
           minimized={callMinimized}
           onToggleMinimize={() => setCallMinimized((m) => !m)}
         />
+        </Suspense>
       )}
 
       {incomingCall && !callTarget && (
+        <Suspense fallback={null}>
         <IncomingCallModal onAccept={handleAcceptCall} />
+        </Suspense>
       )}
 
       {storyViewData && (
+        <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /></div>}>
         <StoryViewer
           storyUsers={storyViewData.users}
           startUserIdx={storyViewData.startIdx}
           onClose={() => setStoryViewData(null)}
         />
+        </Suspense>
       )}
 
       {showStoryUpload && (
+        <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /></div>}>
         <StoryUpload
           onClose={() => setShowStoryUpload(false)}
           onPublished={() => setStoryRefresh((k) => k + 1)}
         />
+        </Suspense>
       )}
     </div>
   );

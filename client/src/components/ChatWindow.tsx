@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { playNotificationSound } from '../context/SocketContext';
@@ -258,21 +258,24 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
 
   // --- Voice playback ---
   const toggleVoice = (msgId: string, url: string) => {
+    if (!url) return;
+    const fullUrl = url.startsWith('http') ? url : `${window.location.origin}${url.startsWith('/') ? '' : '/'}${url}`;
     const existing = audioRefs.current.get(msgId);
     if (existing) {
       if (playingVoice === msgId) {
         existing.pause();
         setPlayingVoice(null);
       } else {
-        existing.play();
+        existing.play().catch(() => setPlayingVoice(null));
         setPlayingVoice(msgId);
       }
       return;
     }
-    const audio = new Audio(url);
+    const audio = new Audio(fullUrl);
     audioRefs.current.set(msgId, audio);
     audio.onended = () => setPlayingVoice(null);
-    audio.play();
+    audio.onerror = () => setPlayingVoice(null);
+    audio.play().catch(() => setPlayingVoice(null));
     setPlayingVoice(msgId);
   };
 
@@ -298,10 +301,10 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
-  const groupMessagesByDate = (msgs: Message[]) => {
+  const messageGroups = useMemo(() => {
     const groups: { date: string; messages: Message[] }[] = [];
     let currentDate = '';
-    msgs.forEach((msg) => {
+    messages.forEach((msg) => {
       const date = new Date(msg.createdAt).toLocaleDateString('ru', {
         day: 'numeric', month: 'long', year: 'numeric',
       });
@@ -313,7 +316,7 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
       }
     });
     return groups;
-  };
+  }, [messages]);
 
   const getReplyMessage = (id: string | null) => id ? messages.find((m) => m.id === id) : null;
 
@@ -337,14 +340,14 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
 
         {msg.type === 'text' && <p className="message-text">{msg.text}</p>}
 
-        {msg.type === 'voice' && (
+        {msg.type === 'voice' && msg.fileUrl && (
           <div className="voice-message" onClick={() => toggleVoice(msg.id, msg.fileUrl!)}>
             <button className="voice-play-btn">
               {playingVoice === msg.id ? <Pause size={18} /> : <Play size={18} />}
             </button>
             <div className="voice-waves">
               {Array.from({ length: 20 }, (_, i) => (
-                <div key={i} className="voice-bar" style={{ height: `${12 + Math.random() * 18}px` }} />
+                <div key={i} className="voice-bar" style={{ height: `${12 + ((msg.id.charCodeAt(i % msg.id.length) % 18) + 1)}px` }} />
               ))}
             </div>
             <span className="voice-duration">{formatDuration(msg.duration || 0)}</span>
@@ -410,7 +413,7 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
       </div>
 
       <div className="chat-messages">
-        {groupMessagesByDate(messages).map((group) => (
+        {messageGroups.map((group) => (
           <div key={group.date} className="date-group">
             <div className="date-separator"><span>{group.date}</span></div>
             {group.messages.map((msg) => (
