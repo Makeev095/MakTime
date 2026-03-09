@@ -77,7 +77,7 @@ function getExtFromMime(mime: string): string {
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: { fileSize: 200 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = /^(image|video|audio)\//;
     if (allowed.test(file.mimetype) || file.mimetype === 'application/pdf') {
@@ -238,6 +238,7 @@ safeAddColumn('messages', 'duration', 'REAL', 'NULL');
 safeAddColumn('messages', 'reply_to_id', 'TEXT', 'NULL');
 safeAddColumn('messages', 'deleted', 'INTEGER', '0');
 safeAddColumn('users', 'bio', 'TEXT', "''");
+safeAddColumn('users', 'avatar_url', 'TEXT', 'NULL');
 
 // --- Prepared Statements ---
 const stmts = {
@@ -246,17 +247,17 @@ const stmts = {
   ),
   findUserByUsername: db.prepare('SELECT * FROM users WHERE username = ?'),
   findUserById: db.prepare(
-    'SELECT id, username, display_name, avatar_color, bio, status, last_seen FROM users WHERE id = ?'
+    'SELECT id, username, display_name, avatar_color, avatar_url, bio, status, last_seen FROM users WHERE id = ?'
   ),
   searchUsers: db.prepare(
-    "SELECT id, username, display_name, avatar_color, status FROM users WHERE (username LIKE ? OR display_name LIKE ?) AND id != ? LIMIT 20"
+    "SELECT id, username, display_name, avatar_color, avatar_url, status FROM users WHERE (username LIKE ? OR display_name LIKE ?) AND id != ? LIMIT 20"
   ),
   updateStatus: db.prepare("UPDATE users SET status = ?, last_seen = datetime('now') WHERE id = ?"),
-  updateProfile: db.prepare('UPDATE users SET display_name = ?, bio = ? WHERE id = ?'),
+  updateProfile: db.prepare('UPDATE users SET display_name = ?, bio = ?, avatar_url = ? WHERE id = ?'),
 
   addContact: db.prepare('INSERT OR IGNORE INTO contacts (user_id, contact_id) VALUES (?, ?)'),
   getContacts: db.prepare(`
-    SELECT u.id, u.username, u.display_name, u.avatar_color, u.status, u.last_seen
+    SELECT u.id, u.username, u.display_name, u.avatar_color, u.avatar_url, u.status, u.last_seen
     FROM contacts c JOIN users u ON c.contact_id = u.id
     WHERE c.user_id = ? ORDER BY u.display_name
   `),
@@ -287,7 +288,7 @@ const stmts = {
     ORDER BY last_message_time DESC NULLS LAST
   `),
   getConversationParticipants: db.prepare(`
-    SELECT u.id, u.username, u.display_name, u.avatar_color, u.status, u.last_seen
+    SELECT u.id, u.username, u.display_name, u.avatar_color, u.avatar_url, u.status, u.last_seen
     FROM conversation_participants cp JOIN users u ON cp.user_id = u.id
     WHERE cp.conversation_id = ?
   `),
@@ -316,7 +317,7 @@ const stmts = {
   ),
   getContactStoryUsers: db.prepare(`
     SELECT DISTINCT s.user_id,
-      u.username, u.display_name, u.avatar_color,
+      u.username, u.display_name, u.avatar_color, u.avatar_url,
       MAX(s.created_at) as latest_story,
       COUNT(s.id) as story_count
     FROM stories s
@@ -331,7 +332,7 @@ const stmts = {
   ),
   addStoryView: db.prepare('INSERT OR IGNORE INTO story_views (story_id, viewer_id) VALUES (?, ?)'),
   getStoryViewers: db.prepare(`
-    SELECT sv.viewed_at, u.id, u.username, u.display_name, u.avatar_color
+    SELECT sv.viewed_at, u.id, u.username, u.display_name, u.avatar_color, u.avatar_url
     FROM story_views sv JOIN users u ON sv.viewer_id = u.id
     WHERE sv.story_id = ? ORDER BY sv.viewed_at DESC
   `),
@@ -459,7 +460,7 @@ app.post('/api/auth/register', authLimiter, (req, res) => {
     const token = jwt.sign({ userId: id }, JWT_SECRET, { expiresIn: '30d' });
     res.json({
       token,
-      user: { id, username: clean, displayName: sanitize(displayName), avatarColor: color, bio: '' },
+      user: { id, username: clean, displayName: sanitize(displayName), avatarColor: color, avatarUrl: null, bio: '' },
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -491,6 +492,7 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
         username: user.username,
         displayName: user.display_name,
         avatarColor: user.avatar_color,
+        avatarUrl: user.avatar_url || null,
         bio: user.bio || '',
       },
     });
@@ -507,20 +509,23 @@ app.get('/api/auth/me', authMiddleware, (req, res) => {
     username: user.username,
     displayName: user.display_name,
     avatarColor: user.avatar_color,
+    avatarUrl: user.avatar_url || null,
     bio: user.bio || '',
   });
 });
 
 app.put('/api/auth/profile', authMiddleware, (req, res) => {
-  const { displayName, bio } = req.body;
+  const { displayName, bio, avatarUrl } = req.body;
   const userId = (req as any).userId;
-  stmts.updateProfile.run(sanitize(displayName || ''), sanitize(bio || ''), userId);
+  const url = avatarUrl && typeof avatarUrl === 'string' && avatarUrl.startsWith('/uploads/') ? avatarUrl : null;
+  stmts.updateProfile.run(sanitize(displayName || ''), sanitize(bio || ''), url, userId);
   const user = stmts.findUserById.get(userId) as any;
   res.json({
     id: user.id,
     username: user.username,
     displayName: user.display_name,
     avatarColor: user.avatar_color,
+    avatarUrl: user.avatar_url || null,
     bio: user.bio || '',
   });
 });
@@ -533,7 +538,7 @@ app.get('/api/users/search', authMiddleware, (req, res) => {
   const lower = query.toLowerCase();
 
   const users = db.prepare(
-    'SELECT id, username, display_name, avatar_color, status FROM users WHERE id != ? LIMIT 500'
+    'SELECT id, username, display_name, avatar_color, avatar_url, status FROM users WHERE id != ? LIMIT 500'
   ).all(userId) as any[];
 
   const filtered = users.filter((u) =>
@@ -546,6 +551,7 @@ app.get('/api/users/search', authMiddleware, (req, res) => {
       username: u.username,
       displayName: u.display_name,
       avatarColor: u.avatar_color,
+      avatarUrl: u.avatar_url || null,
       status: u.status,
     }))
   );
@@ -569,6 +575,7 @@ app.get('/api/contacts', authMiddleware, (req, res) => {
       username: c.username,
       displayName: c.display_name,
       avatarColor: c.avatar_color,
+      avatarUrl: c.avatar_url || null,
       status: c.status,
       lastSeen: c.last_seen,
     }))
@@ -594,6 +601,7 @@ app.get('/api/conversations', authMiddleware, (req, res) => {
             username: other.username,
             displayName: other.display_name,
             avatarColor: other.avatar_color,
+            avatarUrl: other.avatar_url || null,
             status: other.status,
             lastSeen: other.last_seen,
           }
@@ -690,6 +698,7 @@ app.get('/api/stories', authMiddleware, (req, res) => {
       username: su.username,
       displayName: su.display_name,
       avatarColor: su.avatar_color,
+      avatarUrl: su.avatar_url || null,
       storyCount: su.story_count,
       hasUnviewed,
       isOwn: su.user_id === userId,
@@ -733,6 +742,7 @@ app.get('/api/stories/:storyId/viewers', authMiddleware, (req, res) => {
     userId: v.id,
     displayName: v.display_name,
     avatarColor: v.avatar_color,
+    avatarUrl: v.avatar_url || null,
     viewedAt: v.viewed_at,
   })));
 });
