@@ -77,7 +77,7 @@ function getExtFromMime(mime: string): string {
 
 const upload = multer({
   storage,
-  limits: { fileSize: 200 * 1024 * 1024 },
+  limits: { fileSize: 500 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = /^(image|video|audio)\//;
     if (allowed.test(file.mimetype) || file.mimetype === 'application/pdf') {
@@ -152,6 +152,14 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_conv_participants ON conversation_participants(user_id);
+
+  CREATE TABLE IF NOT EXISTS user_hidden_conversations (
+    user_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    PRIMARY KEY (user_id, conversation_id),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+  );
 
   CREATE TABLE IF NOT EXISTS stories (
     id TEXT PRIMARY KEY,
@@ -284,9 +292,11 @@ const stmts = {
     FROM conversations c
     JOIN conversation_participants cp ON c.id = cp.conversation_id
     WHERE cp.user_id = ?
+      AND NOT EXISTS (SELECT 1 FROM user_hidden_conversations uhc WHERE uhc.user_id = ? AND uhc.conversation_id = c.id)
       AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.deleted = 0)
     ORDER BY last_message_time DESC NULLS LAST
   `),
+  hideConversation: db.prepare('INSERT OR IGNORE INTO user_hidden_conversations (user_id, conversation_id) VALUES (?, ?)'),
   getConversationParticipants: db.prepare(`
     SELECT u.id, u.username, u.display_name, u.avatar_color, u.avatar_url, u.status, u.last_seen
     FROM conversation_participants cp JOIN users u ON cp.user_id = u.id
@@ -585,7 +595,7 @@ app.get('/api/contacts', authMiddleware, (req, res) => {
 // --- Conversations ---
 app.get('/api/conversations', authMiddleware, (req, res) => {
   const userId = (req as any).userId;
-  const conversations = stmts.getUserConversations.all(userId, userId) as any[];
+  const conversations = stmts.getUserConversations.all(userId, userId, userId) as any[];
   const result = conversations.map((conv) => {
     const participants = stmts.getConversationParticipants.all(conv.id) as any[];
     const other = participants.find((p: any) => p.id !== userId);
@@ -624,6 +634,16 @@ app.post('/api/conversations', authMiddleware, (req, res) => {
   stmts.addParticipant.run(id, participantId);
 
   res.json({ id, existing: false });
+});
+
+app.delete('/api/conversations/:id', authMiddleware, (req, res) => {
+  const userId = (req as any).userId;
+  const conversationId = req.params.id;
+  const participants = stmts.getConversationParticipants.all(conversationId) as any[];
+  const isParticipant = participants.some((p: any) => p.id === userId);
+  if (!isParticipant) return res.status(404).json({ error: 'Чат не найден' });
+  stmts.hideConversation.run(userId, conversationId);
+  res.json({ ok: true });
 });
 
 app.get('/api/conversations/:id/messages', authMiddleware, (req, res) => {
@@ -864,9 +884,19 @@ app.post('/api/posts/:postId/repost', authMiddleware, (req, res) => {
 });
 
 app.delete('/api/posts/:postId', authMiddleware, (req, res) => {
-  const userId = (req as any).userId;
-  stmts.deletePost.run(req.params.postId, userId);
-  res.json({ ok: true });
+  try {
+    const userId = (req as any).userId;
+    const postId = req.params.postId;
+    const post = stmts.getPost.get(postId) as any;
+    if (!post) return res.status(404).json({ error: 'Пост не найден' });
+    if (post.author_id !== userId) return res.status(403).json({ error: 'Нет прав на удаление' });
+    db.prepare('DELETE FROM post_comments WHERE post_id = ?').run(postId);
+    db.prepare('DELETE FROM post_likes WHERE post_id = ?').run(postId);
+    stmts.deletePost.run(postId, userId);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Ошибка удаления' });
+  }
 });
 
 app.get('/api/posts/:postId/comments', authMiddleware, (req, res) => {
