@@ -11,6 +11,7 @@ import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs';
+import { logApnsVoipStartup, sendVoipIncomingCall } from './apnsVoip';
 
 const app = express();
 const httpServer = createServer(app);
@@ -406,6 +407,8 @@ const stmts = {
   addPostComment: db.prepare(
     'INSERT INTO post_comments (id, post_id, author_id, text) VALUES (?, ?, ?, ?)'
   ),
+
+  getVoipToken: db.prepare('SELECT token_hex FROM voip_device_tokens WHERE user_id = ?'),
 };
 
 function sanitize(str: string): string {
@@ -1084,9 +1087,20 @@ io.on('connection', (socket) => {
         callerName: data.callerName,
         conversationId: data.conversationId,
       });
-    } else {
-      socket.emit('call:unavailable', { userId: data.to });
+      return;
     }
+    const voipRow = stmts.getVoipToken.get(data.to) as { token_hex: string } | undefined;
+    const callUUID = uuidv4();
+    void sendVoipIncomingCall(voipRow?.token_hex, {
+      callUUID,
+      from: userId,
+      callerName: data.callerName,
+      conversationId: data.conversationId,
+    }).then((r) => {
+      if (!r.ok) {
+        socket.emit('call:unavailable', { userId: data.to });
+      }
+    });
   });
 
   socket.on('call:accept', (data: { to: string }) => {
@@ -1142,4 +1156,5 @@ if (fs.existsSync(clientIndexHtml)) {
 
 httpServer.listen(PORT, () => {
   console.log(`MakTime server running on http://localhost:${PORT}`);
+  logApnsVoipStartup();
 });

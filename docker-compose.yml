@@ -13,6 +13,8 @@ services:
     volumes:
       - maktime-db:/app/server/db
       - maktime-uploads:/app/server/uploads
+      # Раскомментируй и положи .p8 рядом, если используешь VoIP push (см. APNS_KEY_PATH в .env):
+      # - ./secrets/AuthKey.p8:/app/secrets/AuthKey.p8:ro
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001"]
       interval: 30s
