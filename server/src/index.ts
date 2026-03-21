@@ -231,6 +231,14 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_post_likes ON post_likes(post_id);
   CREATE INDEX IF NOT EXISTS idx_post_comments ON post_comments(post_id);
+
+  CREATE TABLE IF NOT EXISTS voip_device_tokens (
+    user_id TEXT PRIMARY KEY,
+    token_hex TEXT NOT NULL,
+    platform TEXT NOT NULL DEFAULT 'ios',
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
 `);
 
 // Migrate existing DB — add columns if missing
@@ -522,6 +530,29 @@ app.get('/api/auth/me', authMiddleware, (req, res) => {
     avatarUrl: user.avatar_url || null,
     bio: user.bio || '',
   });
+});
+
+// VoIP device token (iOS PushKit) — одна запись на пользователя, последний токен перезаписывает предыдущий
+app.post('/api/devices/voip-token', authMiddleware, (req, res) => {
+  try {
+    const userId = (req as any).userId as string;
+    const { token, platform } = req.body as { token?: string; platform?: string };
+    if (!token || typeof token !== 'string' || token.length < 16) {
+      return res.status(400).json({ error: 'token required (hex from APNs)' });
+    }
+    const plat = typeof platform === 'string' && platform ? platform : 'ios';
+    db.prepare(
+      `INSERT INTO voip_device_tokens (user_id, token_hex, platform, updated_at)
+       VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(user_id) DO UPDATE SET
+         token_hex = excluded.token_hex,
+         platform = excluded.platform,
+         updated_at = datetime('now')`
+    ).run(userId, token.toLowerCase(), plat);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.put('/api/auth/profile', authMiddleware, (req, res) => {
