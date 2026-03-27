@@ -12,6 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs';
 import { logApnsVoipStartup, sendVoipIncomingCall } from './apnsVoip';
+import { logApnsAlertStartup, sendChatMessageAlert } from './apnsAlert';
 
 const app = express();
 const httpServer = createServer(app);
@@ -240,6 +241,14 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES users(id)
   );
+
+  CREATE TABLE IF NOT EXISTS apns_device_tokens (
+    user_id TEXT PRIMARY KEY,
+    token_hex TEXT NOT NULL,
+    platform TEXT NOT NULL DEFAULT 'ios',
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
 `);
 
 // Migrate existing DB — add columns if missing
@@ -409,6 +418,7 @@ const stmts = {
   ),
 
   getVoipToken: db.prepare('SELECT token_hex FROM voip_device_tokens WHERE user_id = ?'),
+  getApnsToken: db.prepare('SELECT token_hex FROM apns_device_tokens WHERE user_id = ?'),
 };
 
 function sanitize(str: string): string {
@@ -431,6 +441,27 @@ function formatMessage(m: any) {
     createdAt: m.created_at,
     read: !!m.read,
   };
+}
+
+/** Текст для APNs (как превью в списке чатов на клиенте). */
+function chatPushPreview(type: string, text: string): string {
+  switch (type) {
+    case 'voice':
+      return '🎤 Голосовое сообщение';
+    case 'image':
+      return '📷 Фото';
+    case 'video':
+      return '🎥 Видео';
+    case 'videoNote':
+      return '📹 Видеосообщение';
+    case 'file':
+      return '📎 Файл';
+    default:
+      break;
+  }
+  const t = (text || '').trim();
+  if (!t) return 'Новое сообщение';
+  return t.length > 160 ? `${t.slice(0, 157)}…` : t;
 }
 
 // --- Auth Middleware ---
@@ -546,6 +577,29 @@ app.post('/api/devices/voip-token', authMiddleware, (req, res) => {
     const plat = typeof platform === 'string' && platform ? platform : 'ios';
     db.prepare(
       `INSERT INTO voip_device_tokens (user_id, token_hex, platform, updated_at)
+       VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(user_id) DO UPDATE SET
+         token_hex = excluded.token_hex,
+         platform = excluded.platform,
+         updated_at = datetime('now')`
+    ).run(userId, token.toLowerCase(), plat);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** APNs device token для обычных уведомлений о сообщениях (не PushKit). Отдельный токен от VoIP. */
+app.post('/api/devices/apns-token', authMiddleware, (req, res) => {
+  try {
+    const userId = (req as any).userId as string;
+    const { token, platform } = req.body as { token?: string; platform?: string };
+    if (!token || typeof token !== 'string' || token.length < 16) {
+      return res.status(400).json({ error: 'token required (hex from APNs)' });
+    }
+    const plat = typeof platform === 'string' && platform ? platform : 'ios';
+    db.prepare(
+      `INSERT INTO apns_device_tokens (user_id, token_hex, platform, updated_at)
        VALUES (?, ?, ?, datetime('now'))
        ON CONFLICT(user_id) DO UPDATE SET
          token_hex = excluded.token_hex,
@@ -1049,6 +1103,20 @@ io.on('connection', (socket) => {
         }
       }
     });
+
+    const senderRow = stmts.findUserById.get(userId) as { display_name?: string } | undefined;
+    const senderTitle = ((senderRow?.display_name ?? '') as string).trim() || 'MakTime';
+    const alertBody = chatPushPreview(type, text);
+    participants.forEach((p) => {
+      if (p.id === userId) return;
+      if (onlineUsers.has(p.id)) return;
+      const apnsRow = stmts.getApnsToken.get(p.id) as { token_hex: string } | undefined;
+      void sendChatMessageAlert(apnsRow?.token_hex, {
+        conversationId: data.conversationId,
+        title: senderTitle,
+        body: alertBody,
+      });
+    });
   });
 
   socket.on('message:read', (data: { conversationId: string }) => {
@@ -1157,4 +1225,5 @@ if (fs.existsSync(clientIndexHtml)) {
 httpServer.listen(PORT, () => {
   console.log(`MakTime server running on http://localhost:${PORT}`);
   logApnsVoipStartup();
+  logApnsAlertStartup();
 });
