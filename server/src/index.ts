@@ -24,6 +24,15 @@ const io = new Server(httpServer, {
 const JWT_SECRET = process.env.JWT_SECRET || 'maktime-secret-key-change-in-production';
 const PORT = process.env.PORT || 3001;
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
+const TURN_USER = process.env.TURN_USER || 'maktime';
+const TURN_PASS = process.env.TURN_PASS || 'MakTimeT0rn2026!';
+const TURN_REALM = process.env.TURN_REALM || 'maktime.space';
+const TURN_HOST = process.env.TURN_HOST || '';
+const TURN_PORT = Number(process.env.TURN_PORT || 3478);
+const STUN_SERVERS = (process.env.STUN_SERVERS || 'stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302,stun:stun2.l.google.com:19302')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 ['images', 'voice', 'files', 'video'].forEach((dir) => {
   fs.mkdirSync(path.join(UPLOADS_DIR, dir), { recursive: true });
@@ -443,6 +452,15 @@ function formatMessage(m: any) {
   };
 }
 
+function resolveTurnHost(req: express.Request): string {
+  if (TURN_HOST) return TURN_HOST;
+  const forwardedHost = req.headers['x-forwarded-host'];
+  const rawHost = typeof forwardedHost === 'string'
+    ? forwardedHost.split(',')[0].trim()
+    : req.get('host') || req.hostname || '';
+  return rawHost.replace(/:\d+$/, '') || TURN_REALM;
+}
+
 /** Текст для APNs (как превью в списке чатов на клиенте). */
 function chatPushPreview(type: string, text: string): string {
   switch (type) {
@@ -563,6 +581,29 @@ app.get('/api/auth/me', authMiddleware, (req, res) => {
     avatarColor: user.avatar_color,
     avatarUrl: user.avatar_url || null,
     bio: user.bio || '',
+  });
+});
+
+app.get('/api/webrtc/config', authMiddleware, (req, res) => {
+  const turnHost = resolveTurnHost(req);
+  const iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }> = [
+    { urls: STUN_SERVERS },
+  ];
+
+  if (TURN_USER && TURN_PASS && turnHost) {
+    iceServers.push(
+      { urls: `turn:${turnHost}:${TURN_PORT}`, username: TURN_USER, credential: TURN_PASS },
+      { urls: `turn:${turnHost}:${TURN_PORT}?transport=tcp`, username: TURN_USER, credential: TURN_PASS }
+    );
+  }
+
+  res.json({
+    iceServers,
+    turn: {
+      host: turnHost,
+      port: TURN_PORT,
+      realm: TURN_REALM,
+    },
   });
 });
 
@@ -1043,80 +1084,100 @@ io.on('connection', (socket) => {
   allRooms.forEach((c: any) => socket.join(c.conversation_id));
 
   // --- Messaging ---
-  socket.on('message:send', (data: {
-    conversationId: string;
-    text?: string;
-    type?: string;
-    fileUrl?: string;
-    fileName?: string;
-    duration?: number;
-    replyToId?: string;
-  }) => {
-    const participants = stmts.getConversationParticipants.all(data.conversationId) as any[];
-    if (!participants.some((p) => p.id === userId)) return;
-    if (data.fileUrl && !data.fileUrl.startsWith('/uploads/')) return;
+  socket.on('message:send', (
+    data: {
+      conversationId: string;
+      text?: string;
+      type?: string;
+      fileUrl?: string;
+      fileName?: string;
+      duration?: number;
+      replyToId?: string;
+    },
+    ack?: (result: { ok: boolean; message?: any; error?: string }) => void
+  ) => {
+    try {
+      const done = (result: { ok: boolean; message?: any; error?: string }) => {
+        if (typeof ack === 'function') ack(result);
+      };
 
-    const msgId = uuidv4();
-    const type = data.type || 'text';
-    const text = data.text ? sanitize(data.text) : '';
+      const participants = stmts.getConversationParticipants.all(data.conversationId) as any[];
+      if (!participants.some((p) => p.id === userId)) {
+        done({ ok: false, error: 'Нет доступа к чату' });
+        return;
+      }
+      if (data.fileUrl && !data.fileUrl.startsWith('/uploads/')) {
+        done({ ok: false, error: 'Некорректный файл' });
+        return;
+      }
 
-    stmts.createMessage.run(
-      msgId, data.conversationId, userId, type, text,
-      data.fileUrl || null, data.fileName || null,
-      data.duration || null, data.replyToId || null
-    );
+      const msgId = uuidv4();
+      const type = data.type || 'text';
+      const text = data.text ? sanitize(data.text) : '';
 
-    const message = {
-      id: msgId,
-      conversationId: data.conversationId,
-      senderId: userId,
-      type,
-      text,
-      fileUrl: data.fileUrl || null,
-      fileName: data.fileName || null,
-      duration: data.duration || null,
-      replyToId: data.replyToId || null,
-      createdAt: new Date().toISOString(),
-      read: false,
-    };
+      stmts.createMessage.run(
+        msgId, data.conversationId, userId, type, text,
+        data.fileUrl || null, data.fileName || null,
+        data.duration || null, data.replyToId || null
+      );
 
-    io.to(data.conversationId).emit('message:new', message);
+      const message = {
+        id: msgId,
+        conversationId: data.conversationId,
+        senderId: userId,
+        type,
+        text,
+        fileUrl: data.fileUrl || null,
+        fileName: data.fileName || null,
+        duration: data.duration || null,
+        replyToId: data.replyToId || null,
+        createdAt: new Date().toISOString(),
+        read: false,
+      };
 
-    const msgCount = (db.prepare(
-      'SELECT COUNT(*) as cnt FROM messages WHERE conversation_id = ? AND deleted = 0'
-    ).get(data.conversationId) as any).cnt;
+      io.to(data.conversationId).emit('message:new', message);
+      done({ ok: true, message });
 
-    participants.forEach((p) => {
-      if (p.id !== userId) {
-        const sid = onlineUsers.get(p.id);
-        if (sid) {
-          const targetSocket = io.sockets.sockets.get(sid);
-          if (targetSocket) {
-            if (!targetSocket.rooms.has(data.conversationId)) {
-              targetSocket.join(data.conversationId);
-              targetSocket.emit('message:new', message);
-            }
-            if (msgCount === 1) {
-              targetSocket.emit('conversation:created', { id: data.conversationId });
+      const msgCount = (db.prepare(
+        'SELECT COUNT(*) as cnt FROM messages WHERE conversation_id = ? AND deleted = 0'
+      ).get(data.conversationId) as any).cnt;
+
+      participants.forEach((p) => {
+        if (p.id !== userId) {
+          const sid = onlineUsers.get(p.id);
+          if (sid) {
+            const targetSocket = io.sockets.sockets.get(sid);
+            if (targetSocket) {
+              if (!targetSocket.rooms.has(data.conversationId)) {
+                targetSocket.join(data.conversationId);
+                targetSocket.emit('message:new', message);
+              }
+              if (msgCount === 1) {
+                targetSocket.emit('conversation:created', { id: data.conversationId });
+              }
             }
           }
         }
-      }
-    });
-
-    const senderRow = stmts.findUserById.get(userId) as { display_name?: string } | undefined;
-    const senderTitle = ((senderRow?.display_name ?? '') as string).trim() || 'MakTime';
-    const alertBody = chatPushPreview(type, text);
-    participants.forEach((p) => {
-      if (p.id === userId) return;
-      if (onlineUsers.has(p.id)) return;
-      const apnsRow = stmts.getApnsToken.get(p.id) as { token_hex: string } | undefined;
-      void sendChatMessageAlert(apnsRow?.token_hex, {
-        conversationId: data.conversationId,
-        title: senderTitle,
-        body: alertBody,
       });
-    });
+
+      const senderRow = stmts.findUserById.get(userId) as { display_name?: string } | undefined;
+      const senderTitle = ((senderRow?.display_name ?? '') as string).trim() || 'MakTime';
+      const alertBody = chatPushPreview(type, text);
+      participants.forEach((p) => {
+        if (p.id === userId) return;
+        if (onlineUsers.has(p.id)) return;
+        const apnsRow = stmts.getApnsToken.get(p.id) as { token_hex: string } | undefined;
+        void sendChatMessageAlert(apnsRow?.token_hex, {
+          conversationId: data.conversationId,
+          title: senderTitle,
+          body: alertBody,
+        });
+      });
+    } catch (error: any) {
+      if (typeof ack === 'function') {
+        ack({ ok: false, error: error?.message || 'Ошибка отправки' });
+      }
+    }
   });
 
   socket.on('message:read', (data: { conversationId: string }) => {

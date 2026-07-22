@@ -1,4 +1,4 @@
-import { useState, useCallback, lazy, Suspense } from 'react';
+import { useState, useCallback, useEffect, lazy, Suspense } from 'react';
 import { useAuth } from './context/AuthContext';
 import { useSocket } from './context/SocketContext';
 import AuthPage from './components/AuthPage';
@@ -49,6 +49,36 @@ export default function App() {
   const handleEndCall = useCallback(() => {
     setCallTarget(null);
     setCallMinimized(false);
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const vv = window.visualViewport;
+
+    const updateViewport = () => {
+      const visualHeight = vv?.height || window.innerHeight;
+      const keyboardInset = Math.max(
+        0,
+        window.innerHeight - ((vv?.height || window.innerHeight) + (vv?.offsetTop || 0))
+      );
+      root.style.setProperty('--app-height', `${visualHeight}px`);
+      root.style.setProperty('--keyboard-inset', `${keyboardInset}px`);
+      root.classList.toggle('keyboard-open', keyboardInset > 120);
+    };
+
+    updateViewport();
+    window.addEventListener('resize', updateViewport);
+    vv?.addEventListener('resize', updateViewport);
+    vv?.addEventListener('scroll', updateViewport);
+
+    return () => {
+      window.removeEventListener('resize', updateViewport);
+      vv?.removeEventListener('resize', updateViewport);
+      vv?.removeEventListener('scroll', updateViewport);
+      root.style.removeProperty('--app-height');
+      root.style.removeProperty('--keyboard-inset');
+      root.classList.remove('keyboard-open');
+    };
   }, []);
 
   if (loading) {

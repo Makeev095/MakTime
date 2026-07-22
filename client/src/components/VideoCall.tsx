@@ -15,7 +15,7 @@ interface Props {
   onToggleMinimize?: () => void;
 }
 
-function buildIceConfig(): RTCConfiguration {
+function buildFallbackIceConfig(): RTCConfiguration {
   const host = window.location.hostname;
   return {
     iceServers: [
@@ -38,6 +38,26 @@ function buildIceConfig(): RTCConfiguration {
   };
 }
 
+async function loadIceConfig(token: string | null): Promise<RTCConfiguration> {
+  const fallback = buildFallbackIceConfig();
+  if (!token) return fallback;
+  try {
+    const res = await fetch('/api/webrtc/config', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return fallback;
+    const data = await res.json() as { iceServers?: RTCIceServer[] };
+    if (!Array.isArray(data.iceServers) || data.iceServers.length === 0) return fallback;
+    return {
+      iceServers: data.iceServers,
+      iceCandidatePoolSize: 10,
+      iceTransportPolicy: 'all',
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 const VIDEO_FILTERS = [
   { name: 'Без фильтра', css: 'none' },
   { name: 'Тёплый', css: 'sepia(0.3) saturate(1.4) brightness(1.1)' },
@@ -50,7 +70,7 @@ const VIDEO_FILTERS = [
 ];
 
 export default function VideoCall({ targetUserId, targetName, conversationId, isInitiator, onEnd, minimized, onToggleMinimize }: Props) {
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const { socket, setIncomingCall } = useSocket();
   const [status, setStatus] = useState(isInitiator ? 'calling' : 'connecting');
   const [isMuted, setIsMuted] = useState(false);
@@ -59,6 +79,8 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
   const [filterIdx, setFilterIdx] = useState(0);
   const [showFilters, setShowFilters] = useState(false);
   const [isFrontCamera, setIsFrontCamera] = useState(true);
+  const [nativePipSupported, setNativePipSupported] = useState(false);
+  const [nativePipActive, setNativePipActive] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -79,6 +101,31 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
   const endCall = useCallback(() => { endCallRef.current(); }, []);
 
   useEffect(() => {
+    const remote = remoteVideoRef.current as (HTMLVideoElement & {
+      requestPictureInPicture?: () => Promise<PictureInPictureWindow>;
+    }) | null;
+    const docWithPip = document as Document & {
+      pictureInPictureEnabled?: boolean;
+    };
+
+    if (!remote || !docWithPip.pictureInPictureEnabled || typeof remote.requestPictureInPicture !== 'function') {
+      setNativePipSupported(false);
+      return;
+    }
+    setNativePipSupported(true);
+
+    const onEnter = () => setNativePipActive(true);
+    const onLeave = () => setNativePipActive(false);
+    remote.addEventListener('enterpictureinpicture', onEnter as EventListener);
+    remote.addEventListener('leavepictureinpicture', onLeave as EventListener);
+
+    return () => {
+      remote.removeEventListener('enterpictureinpicture', onEnter as EventListener);
+      remote.removeEventListener('leavepictureinpicture', onLeave as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!socket) return;
 
     let mounted = true;
@@ -96,6 +143,13 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
       hasRemoteDesc.current = false;
       iceRestartCount.current = 0;
       iceCandidateQueue.current = [];
+      const docWithPip = document as Document & {
+        pictureInPictureElement?: Element | null;
+        exitPictureInPicture?: () => Promise<void>;
+      };
+      if (docWithPip.pictureInPictureElement && typeof docWithPip.exitPictureInPicture === 'function') {
+        void docWithPip.exitPictureInPicture().catch(() => {});
+      }
     };
 
     const doEnd = () => {
@@ -206,6 +260,11 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
 
     const setupCall = async () => {
       try {
+        if (!window.isSecureContext && window.location.hostname !== 'localhost') {
+          setStatus('insecure');
+          setTimeout(() => doEndRemote(), 2500);
+          return;
+        }
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -215,7 +274,7 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
         localStreamRef.current = stream;
         if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
-        const pc = new RTCPeerConnection(buildIceConfig());
+        const pc = new RTCPeerConnection(await loadIceConfig(token));
         pcRef.current = pc;
 
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));
@@ -376,6 +435,26 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
     }
   };
 
+  const toggleNativePip = async () => {
+    const remote = remoteVideoRef.current as (HTMLVideoElement & {
+      requestPictureInPicture?: () => Promise<PictureInPictureWindow>;
+    }) | null;
+    const docWithPip = document as Document & {
+      pictureInPictureElement?: Element | null;
+      exitPictureInPicture?: () => Promise<void>;
+    };
+    if (!remote || typeof remote.requestPictureInPicture !== 'function') return;
+    try {
+      if (docWithPip.pictureInPictureElement && typeof docWithPip.exitPictureInPicture === 'function') {
+        await docWithPip.exitPictureInPicture();
+      } else {
+        await remote.requestPictureInPicture();
+      }
+    } catch (error) {
+      console.warn('[WebRTC] PiP error:', error);
+    }
+  };
+
   const formatDur = (s: number) => {
     const m = Math.floor(s / 60);
     const sec = s % 60;
@@ -384,7 +463,10 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
 
   const statusText: Record<string, string> = {
     calling: 'Вызов...', connecting: 'Подключение...', connected: formatDur(duration),
-    rejected: 'Вызов отклонён', unavailable: 'Абонент недоступен', error: 'Ошибка соединения',
+    rejected: 'Вызов отклонён',
+    unavailable: 'Абонент недоступен',
+    error: 'Ошибка соединения',
+    insecure: 'Для звонка нужен HTTPS',
   };
 
   const currentFilter = VIDEO_FILTERS[filterIdx].css;
@@ -463,6 +545,15 @@ export default function VideoCall({ targetUserId, targetName, conversationId, is
             <button className="call-control-btn" onClick={() => setShowFilters(!showFilters)} title="Эффекты">
               <Sparkles size={24} />
             </button>
+            {nativePipSupported && (
+              <button
+                className={`call-control-btn ${nativePipActive ? 'active' : ''}`}
+                onClick={toggleNativePip}
+                title="Окно в окне"
+              >
+                PiP
+              </button>
+            )}
             {onToggleMinimize && (
               <button className="call-control-btn" onClick={onToggleMinimize} title="Свернуть">
                 <Minimize2 size={24} />

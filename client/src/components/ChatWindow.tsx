@@ -16,6 +16,22 @@ interface Props {
   onConversationUpdate: () => void;
 }
 
+type OutgoingMessagePayload = {
+  conversationId: string;
+  text?: string;
+  type?: Message['type'];
+  fileUrl?: string;
+  fileName?: string;
+  duration?: number;
+  replyToId?: string | null;
+};
+
+type MessageSendAck = {
+  ok: boolean;
+  message?: Message;
+  error?: string;
+};
+
 export default function ChatWindow({ conversation, onBack, onStartCall, onConversationUpdate }: Props) {
   const { user, token } = useAuth();
   const { socket } = useSocket();
@@ -35,8 +51,19 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recTimerRef = useRef<number>();
+  const recordingTimeRef = useRef(0);
   const typingTimerRef = useRef<number>();
   const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
+
+  const pushMessage = useCallback((nextMessage: Message, replaceId?: string) => {
+    setMessages((prev) => {
+      const withoutReplaced = replaceId ? prev.filter((m) => m.id !== replaceId) : prev;
+      const withoutDuplicate = withoutReplaced.filter((m) => m.id !== nextMessage.id);
+      return [...withoutDuplicate, nextMessage].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+    });
+  }, []);
 
   const fetchMessages = useCallback(async () => {
     const res = await fetch(`/api/conversations/${conversation.id}/messages`, {
@@ -62,10 +89,7 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
 
     const handleNewMessage = (msg: Message) => {
       if (msg.conversationId === conversation.id) {
-        setMessages((prev) => {
-          if (prev.some((m) => m.id === msg.id)) return prev;
-          return [...prev, msg];
-        });
+        pushMessage(msg);
         if (msg.senderId !== user?.id) {
           socket.emit('message:read', { conversationId: conversation.id });
           playNotificationSound();
@@ -121,9 +145,8 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
     const vv = window.visualViewport;
     if (!vv) return;
     const update = () => {
-      document.documentElement.style.setProperty('--app-height', `${vv.height}px`);
       requestAnimationFrame(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'instant' });
+        bottomRef.current?.scrollIntoView({ behavior: 'auto' });
       });
     };
     update();
@@ -132,7 +155,6 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
     return () => {
       vv.removeEventListener('resize', update);
       vv.removeEventListener('scroll', update);
-      document.documentElement.style.removeProperty('--app-height');
     };
   }, []);
 
@@ -147,21 +169,79 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
     }, 2000);
   };
 
-  // --- Send text message ---
-  const sendMessage = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!text.trim() || !socket) return;
-    socket.emit('typing:stop', { conversationId: conversation.id });
-    socket.emit('message:send', {
+  const emitMessage = useCallback(async (payload: Omit<OutgoingMessagePayload, 'conversationId'>) => {
+    if (!socket) throw new Error('Нет подключения к серверу');
+
+    const now = new Date().toISOString();
+    const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const optimistic: Message = {
+      id: tempId,
       conversationId: conversation.id,
-      text: text.trim(),
-      type: 'text',
-      replyToId: replyTo?.id || null,
+      senderId: user?.id || 'self',
+      type: payload.type || 'text',
+      text: payload.text || '',
+      fileUrl: payload.fileUrl || null,
+      fileName: payload.fileName || null,
+      duration: payload.duration || null,
+      replyToId: payload.replyToId || null,
+      createdAt: now,
+      read: false,
+    };
+    pushMessage(optimistic);
+    onConversationUpdate();
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const timeoutId = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        fetchMessages().finally(resolve);
+      }, 8000);
+
+      socket.emit(
+        'message:send',
+        {
+          ...payload,
+          conversationId: conversation.id,
+          replyToId: payload.replyToId || null,
+        } satisfies OutgoingMessagePayload,
+        (ack?: MessageSendAck) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
+          if (ack?.ok && ack.message) {
+            pushMessage(ack.message, tempId);
+            resolve();
+            return;
+          }
+          setMessages((prev) => prev.filter((m) => m.id !== tempId));
+          reject(new Error(ack?.error || 'Не удалось отправить сообщение'));
+        }
+      );
     });
+  }, [socket, conversation.id, user?.id, pushMessage, onConversationUpdate, fetchMessages]);
+
+  // --- Send text message ---
+  const sendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const value = text.trim();
+    if (!value || !socket) return;
+    socket.emit('typing:stop', { conversationId: conversation.id });
     setText('');
-    setReplyTo(null);
+    const currentReplyTo = replyTo;
     setShowEmoji(false);
     inputRef.current?.focus();
+    try {
+      await emitMessage({
+        text: value,
+        type: 'text',
+        replyToId: currentReplyTo?.id || null,
+      });
+      setReplyTo(null);
+    } catch (error: any) {
+      setText(value);
+      alert(error?.message || 'Не удалось отправить сообщение');
+    }
   };
 
   // --- File upload ---
@@ -181,6 +261,7 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
     const files = e.target.files;
     if (!files || !socket) return;
 
+    const currentReplyToId = replyTo?.id || null;
     for (const file of Array.from(files)) {
       const result = await uploadFile(file);
       if (result) {
@@ -188,17 +269,20 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
         if (file.type.startsWith('image/')) type = 'image';
         else if (file.type.startsWith('video/')) type = 'video';
 
-        socket.emit('message:send', {
-          conversationId: conversation.id,
-          type,
-          text: '',
-          fileUrl: result.fileUrl,
-          fileName: result.fileName,
-          replyToId: replyTo?.id || null,
-        });
-        setReplyTo(null);
+        try {
+          await emitMessage({
+            type,
+            text: '',
+            fileUrl: result.fileUrl,
+            fileName: result.fileName,
+            replyToId: currentReplyToId,
+          });
+        } catch (error: any) {
+          alert(error?.message || 'Не удалось отправить файл');
+        }
       }
     }
+    setReplyTo(null);
     e.target.value = '';
   };
 
@@ -208,6 +292,8 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mr = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
       audioChunksRef.current = [];
+      recordingTimeRef.current = 0;
+      setRecordingTime(0);
       mr.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
       mr.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
@@ -215,22 +301,32 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
         const file = new File([blob], 'voice.webm', { type: 'audio/webm' });
         const result = await uploadFile(file);
         if (result && socket) {
-          socket.emit('message:send', {
-            conversationId: conversation.id,
-            type: 'voice',
-            text: '',
-            fileUrl: result.fileUrl,
-            fileName: 'Голосовое сообщение',
-            duration: recordingTime,
-          });
+          try {
+            await emitMessage({
+              type: 'voice',
+              text: '',
+              fileUrl: result.fileUrl,
+              fileName: 'Голосовое сообщение',
+              duration: recordingTimeRef.current,
+              replyToId: replyTo?.id || null,
+            });
+            setReplyTo(null);
+          } catch (error: any) {
+            alert(error?.message || 'Не удалось отправить голосовое сообщение');
+          }
         }
+        recordingTimeRef.current = 0;
         setRecordingTime(0);
       };
       mr.start();
       mediaRecorderRef.current = mr;
       setIsRecording(true);
       recTimerRef.current = window.setInterval(() => {
-        setRecordingTime((t) => t + 1);
+        setRecordingTime((t) => {
+          const next = t + 1;
+          recordingTimeRef.current = next;
+          return next;
+        });
       }, 1000);
     } catch {
       alert('Не удалось получить доступ к микрофону');
@@ -243,6 +339,7 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
     }
     if (recTimerRef.current) clearInterval(recTimerRef.current);
     setIsRecording(false);
+    recordingTimeRef.current = 0;
   };
 
   const cancelRecording = () => {
@@ -253,6 +350,7 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
     }
     if (recTimerRef.current) clearInterval(recTimerRef.current);
     setIsRecording(false);
+    recordingTimeRef.current = 0;
     setRecordingTime(0);
   };
 
