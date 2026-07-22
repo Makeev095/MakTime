@@ -40,7 +40,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
     const s = io(window.location.origin, {
       auth: { token },
-      transports: ['websocket', 'polling'],
+      transports: ['polling', 'websocket'],
     });
 
     s.on('call:incoming', (data: IncomingCall) => {
