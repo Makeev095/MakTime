@@ -906,13 +906,14 @@ app.get('/api/conversations/:id/messages', authMiddleware, (req, res) => {
 
 app.post('/api/conversations/:id/messages', authMiddleware, (req, res) => {
   const userId = (req as any).userId as string;
+  const conversationId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const {
     text, type, fileUrl, fileName, duration, replyToId, clientMessageId,
   } = req.body || {};
 
   try {
     const message = createAndBroadcastMessage(userId, {
-      conversationId: req.params.id,
+      conversationId,
       text: typeof text === 'string' ? text : '',
       type: typeof type === 'string' ? type : undefined,
       fileUrl: typeof fileUrl === 'string' ? fileUrl : undefined,
