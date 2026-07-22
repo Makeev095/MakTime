@@ -33,6 +33,8 @@ const STUN_SERVERS = (process.env.STUN_SERVERS || 'stun:stun.l.google.com:19302,
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+const onlineUsers = new Map<string, string>();
+const recentSentMessages = new Map<string, { message: any; ts: number }>();
 
 ['images', 'voice', 'files', 'video'].forEach((dir) => {
   fs.mkdirSync(path.join(UPLOADS_DIR, dir), { recursive: true });
@@ -482,6 +484,126 @@ function chatPushPreview(type: string, text: string): string {
   return t.length > 160 ? `${t.slice(0, 157)}…` : t;
 }
 
+type MessageSendPayload = {
+  conversationId: string;
+  text?: string;
+  type?: string;
+  fileUrl?: string;
+  fileName?: string;
+  duration?: number;
+  replyToId?: string;
+  clientMessageId?: string;
+};
+
+function makeHttpError(status: number, message: string): Error & { status: number } {
+  const err = new Error(message) as Error & { status: number };
+  err.status = status;
+  return err;
+}
+
+function cleanupRecentMessages() {
+  const now = Date.now();
+  if (recentSentMessages.size <= 2000) return;
+  for (const [key, value] of recentSentMessages.entries()) {
+    if (now - value.ts > 10 * 60 * 1000) {
+      recentSentMessages.delete(key);
+    }
+  }
+}
+
+function createAndBroadcastMessage(userId: string, data: MessageSendPayload) {
+  cleanupRecentMessages();
+
+  if (!data.conversationId) {
+    throw makeHttpError(400, 'conversationId required');
+  }
+
+  const dedupeKey = data.clientMessageId ? `${userId}:${data.clientMessageId}` : '';
+  if (dedupeKey) {
+    const existing = recentSentMessages.get(dedupeKey);
+    if (existing) return existing.message;
+  }
+
+  const participants = stmts.getConversationParticipants.all(data.conversationId) as any[];
+  if (!participants.some((p) => p.id === userId)) {
+    throw makeHttpError(403, 'Нет доступа к чату');
+  }
+  if (data.fileUrl && !data.fileUrl.startsWith('/uploads/')) {
+    throw makeHttpError(400, 'Некорректный файл');
+  }
+
+  const msgId = uuidv4();
+  const type = data.type || (data.fileUrl ? 'file' : 'text');
+  const text = data.text ? sanitize(data.text) : '';
+  if (type === 'text' && !text.trim() && !data.fileUrl) {
+    throw makeHttpError(400, 'Пустое сообщение');
+  }
+
+  stmts.createMessage.run(
+    msgId, data.conversationId, userId, type, text,
+    data.fileUrl || null, data.fileName || null,
+    data.duration || null, data.replyToId || null
+  );
+
+  const message = {
+    id: msgId,
+    conversationId: data.conversationId,
+    senderId: userId,
+    type,
+    text,
+    fileUrl: data.fileUrl || null,
+    fileName: data.fileName || null,
+    duration: data.duration || null,
+    replyToId: data.replyToId || null,
+    createdAt: new Date().toISOString(),
+    read: false,
+  };
+
+  io.to(data.conversationId).emit('message:new', message);
+
+  const msgCount = (db.prepare(
+    'SELECT COUNT(*) as cnt FROM messages WHERE conversation_id = ? AND deleted = 0'
+  ).get(data.conversationId) as any).cnt;
+
+  participants.forEach((p) => {
+    if (p.id !== userId) {
+      const sid = onlineUsers.get(p.id);
+      if (sid) {
+        const targetSocket = io.sockets.sockets.get(sid);
+        if (targetSocket) {
+          if (!targetSocket.rooms.has(data.conversationId)) {
+            targetSocket.join(data.conversationId);
+            targetSocket.emit('message:new', message);
+          }
+          if (msgCount === 1) {
+            targetSocket.emit('conversation:created', { id: data.conversationId });
+          }
+        }
+      }
+    }
+  });
+
+  const senderRow = stmts.findUserById.get(userId) as { display_name?: string } | undefined;
+  const senderTitle = ((senderRow?.display_name ?? '') as string).trim() || 'MakTime';
+  const alertBody = chatPushPreview(type, text);
+  participants.forEach((p) => {
+    if (p.id === userId) return;
+    if (onlineUsers.has(p.id)) return;
+    const apnsRow = stmts.getApnsToken.get(p.id) as { token_hex: string } | undefined;
+    void sendChatMessageAlert(apnsRow?.token_hex, {
+      conversationId: data.conversationId,
+      title: senderTitle,
+      body: alertBody,
+    });
+  });
+
+  if (dedupeKey) {
+    recentSentMessages.set(dedupeKey, { message, ts: Date.now() });
+  }
+
+  return message;
+}
+
 // --- Auth Middleware ---
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
   const token = req.headers.authorization?.replace('Bearer ', '');
@@ -782,6 +904,30 @@ app.get('/api/conversations/:id/messages', authMiddleware, (req, res) => {
   res.json(messages.map(formatMessage));
 });
 
+app.post('/api/conversations/:id/messages', authMiddleware, (req, res) => {
+  const userId = (req as any).userId as string;
+  const {
+    text, type, fileUrl, fileName, duration, replyToId, clientMessageId,
+  } = req.body || {};
+
+  try {
+    const message = createAndBroadcastMessage(userId, {
+      conversationId: req.params.id,
+      text: typeof text === 'string' ? text : '',
+      type: typeof type === 'string' ? type : undefined,
+      fileUrl: typeof fileUrl === 'string' ? fileUrl : undefined,
+      fileName: typeof fileName === 'string' ? fileName : undefined,
+      duration: typeof duration === 'number' ? duration : undefined,
+      replyToId: typeof replyToId === 'string' ? replyToId : undefined,
+      clientMessageId: typeof clientMessageId === 'string' ? clientMessageId : undefined,
+    });
+    res.json(message);
+  } catch (error: any) {
+    const status = error?.status || 500;
+    res.status(status).json({ error: error?.message || 'Ошибка отправки' });
+  }
+});
+
 app.delete('/api/messages/:id', authMiddleware, (req, res) => {
   const userId = (req as any).userId;
   const msg = stmts.getMessage.get(req.params.id) as any;
@@ -1058,8 +1204,6 @@ app.post('/api/posts/:postId/comments', authMiddleware, (req, res) => {
 });
 
 // --- Socket.IO ---
-const onlineUsers = new Map<string, string>();
-
 io.use((socket, next) => {
   const token = socket.handshake.auth?.token || (socket.handshake.query?.token as string);
   if (!token) return next(new Error('Authentication required'));
@@ -1093,6 +1237,7 @@ io.on('connection', (socket) => {
       fileName?: string;
       duration?: number;
       replyToId?: string;
+      clientMessageId?: string;
     },
     ack?: (result: { ok: boolean; message?: any; error?: string }) => void
   ) => {
@@ -1101,78 +1246,8 @@ io.on('connection', (socket) => {
         if (typeof ack === 'function') ack(result);
       };
 
-      const participants = stmts.getConversationParticipants.all(data.conversationId) as any[];
-      if (!participants.some((p) => p.id === userId)) {
-        done({ ok: false, error: 'Нет доступа к чату' });
-        return;
-      }
-      if (data.fileUrl && !data.fileUrl.startsWith('/uploads/')) {
-        done({ ok: false, error: 'Некорректный файл' });
-        return;
-      }
-
-      const msgId = uuidv4();
-      const type = data.type || 'text';
-      const text = data.text ? sanitize(data.text) : '';
-
-      stmts.createMessage.run(
-        msgId, data.conversationId, userId, type, text,
-        data.fileUrl || null, data.fileName || null,
-        data.duration || null, data.replyToId || null
-      );
-
-      const message = {
-        id: msgId,
-        conversationId: data.conversationId,
-        senderId: userId,
-        type,
-        text,
-        fileUrl: data.fileUrl || null,
-        fileName: data.fileName || null,
-        duration: data.duration || null,
-        replyToId: data.replyToId || null,
-        createdAt: new Date().toISOString(),
-        read: false,
-      };
-
-      io.to(data.conversationId).emit('message:new', message);
+      const message = createAndBroadcastMessage(userId, data);
       done({ ok: true, message });
-
-      const msgCount = (db.prepare(
-        'SELECT COUNT(*) as cnt FROM messages WHERE conversation_id = ? AND deleted = 0'
-      ).get(data.conversationId) as any).cnt;
-
-      participants.forEach((p) => {
-        if (p.id !== userId) {
-          const sid = onlineUsers.get(p.id);
-          if (sid) {
-            const targetSocket = io.sockets.sockets.get(sid);
-            if (targetSocket) {
-              if (!targetSocket.rooms.has(data.conversationId)) {
-                targetSocket.join(data.conversationId);
-                targetSocket.emit('message:new', message);
-              }
-              if (msgCount === 1) {
-                targetSocket.emit('conversation:created', { id: data.conversationId });
-              }
-            }
-          }
-        }
-      });
-
-      const senderRow = stmts.findUserById.get(userId) as { display_name?: string } | undefined;
-      const senderTitle = ((senderRow?.display_name ?? '') as string).trim() || 'MakTime';
-      const alertBody = chatPushPreview(type, text);
-      participants.forEach((p) => {
-        if (p.id === userId) return;
-        if (onlineUsers.has(p.id)) return;
-        const apnsRow = stmts.getApnsToken.get(p.id) as { token_hex: string } | undefined;
-        void sendChatMessageAlert(apnsRow?.token_hex, {
-          conversationId: data.conversationId,
-          title: senderTitle,
-          body: alertBody,
-        });
-      });
     } catch (error: any) {
       if (typeof ack === 'function') {
         ack({ ok: false, error: error?.message || 'Ошибка отправки' });

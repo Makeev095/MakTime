@@ -24,6 +24,7 @@ type OutgoingMessagePayload = {
   fileName?: string;
   duration?: number;
   replyToId?: string | null;
+  clientMessageId?: string;
 };
 
 type MessageSendAck = {
@@ -169,11 +170,33 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
     }, 2000);
   };
 
-  const emitMessage = useCallback(async (payload: Omit<OutgoingMessagePayload, 'conversationId'>) => {
-    if (!socket) throw new Error('Нет подключения к серверу');
+  const sendMessageViaHttp = useCallback(async (payload: OutgoingMessagePayload) => {
+    if (!token) throw new Error('Нет авторизации');
+    const res = await fetch(`/api/conversations/${conversation.id}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Не удалось отправить сообщение');
+    return data as Message;
+  }, [conversation.id, token]);
+
+  const emitMessage = useCallback(async (payload: Omit<OutgoingMessagePayload, 'conversationId' | 'clientMessageId'>) => {
+    const canUseSocket = !!socket && socket.connected;
+    if (!canUseSocket && !token) throw new Error('Нет подключения к серверу');
 
     const now = new Date().toISOString();
     const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const outgoingPayload: OutgoingMessagePayload = {
+      ...payload,
+      conversationId: conversation.id,
+      replyToId: payload.replyToId || null,
+      clientMessageId: tempId,
+    };
     const optimistic: Message = {
       id: tempId,
       conversationId: conversation.id,
@@ -190,43 +213,62 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
     pushMessage(optimistic);
     onConversationUpdate();
 
-    await new Promise<void>((resolve, reject) => {
+    const removeOptimistic = () => {
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+    };
+
+    const trySocketSend = () => new Promise<Message>((resolve, reject) => {
+      if (!socket) {
+        reject(new Error('Нет подключения к серверу'));
+        return;
+      }
       let settled = false;
       const timeoutId = window.setTimeout(() => {
         if (settled) return;
         settled = true;
-        fetchMessages().finally(resolve);
-      }, 8000);
+        reject(new Error('Таймаут сокета'));
+      }, 7000);
 
       socket.emit(
         'message:send',
-        {
-          ...payload,
-          conversationId: conversation.id,
-          replyToId: payload.replyToId || null,
-        } satisfies OutgoingMessagePayload,
+        outgoingPayload,
         (ack?: MessageSendAck) => {
           if (settled) return;
           settled = true;
           clearTimeout(timeoutId);
           if (ack?.ok && ack.message) {
-            pushMessage(ack.message, tempId);
-            resolve();
+            resolve(ack.message);
             return;
           }
-          setMessages((prev) => prev.filter((m) => m.id !== tempId));
           reject(new Error(ack?.error || 'Не удалось отправить сообщение'));
         }
       );
     });
-  }, [socket, conversation.id, user?.id, pushMessage, onConversationUpdate, fetchMessages]);
+
+    try {
+      let persisted: Message;
+      if (canUseSocket) {
+        try {
+          persisted = await trySocketSend();
+        } catch {
+          persisted = await sendMessageViaHttp(outgoingPayload);
+        }
+      } else {
+        persisted = await sendMessageViaHttp(outgoingPayload);
+      }
+      pushMessage(persisted, tempId);
+    } catch (error) {
+      removeOptimistic();
+      throw error;
+    }
+  }, [socket, token, conversation.id, user?.id, pushMessage, onConversationUpdate, sendMessageViaHttp]);
 
   // --- Send text message ---
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     const value = text.trim();
-    if (!value || !socket) return;
-    socket.emit('typing:stop', { conversationId: conversation.id });
+    if (!value) return;
+    if (socket) socket.emit('typing:stop', { conversationId: conversation.id });
     setText('');
     const currentReplyTo = replyTo;
     setShowEmoji(false);
@@ -259,7 +301,7 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files || !socket) return;
+    if (!files) return;
 
     const currentReplyToId = replyTo?.id || null;
     for (const file of Array.from(files)) {
@@ -300,7 +342,7 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
         const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         const file = new File([blob], 'voice.webm', { type: 'audio/webm' });
         const result = await uploadFile(file);
-        if (result && socket) {
+        if (result) {
           try {
             await emitMessage({
               type: 'voice',
