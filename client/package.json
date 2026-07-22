@@ -7,9 +7,19 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "mobile:doctor": "npx cap doctor",
+    "mobile:copy": "npm run build && npx cap copy",
+    "mobile:sync": "npm run build && npx cap sync",
+    "mobile:android:open": "npx cap open android",
+    "mobile:ios:open": "npx cap open ios",
+    "mobile:android:debug": "npm run mobile:sync && cd android && ./gradlew assembleDebug",
+    "mobile:android:release": "npm run mobile:sync && cd android && ./gradlew assembleRelease"
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/core": "^8.4.2",
+    "@capacitor/ios": "^8.4.2",
     "lucide-react": "^0.460.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -17,6 +27,7 @@
     "socket.io-client": "^4.8.0"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.4.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^18.3.12",

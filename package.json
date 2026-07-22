@@ -8,7 +8,11 @@
     "dev:client": "cd client && npm run dev",
     "build": "cd client && npm run build",
     "start": "cd server && npm start",
-    "install:all": "npm install && cd server && npm install && cd ../client && npm install"
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install",
+    "mobile:sync": "cd client && npm run mobile:sync",
+    "mobile:android:open": "cd client && npm run mobile:android:open",
+    "mobile:ios:open": "cd client && npm run mobile:ios:open",
+    "mobile:android:debug": "cd client && npm run mobile:android:debug"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

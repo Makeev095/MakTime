@@ -1,5 +1,7 @@
 # MakTime — Деплой через Docker на VPS
 
+> Для iOS/Android сборок см. `README-MOBILE.md`.
+
 ## Что нужно
 
 - VPS с Ubuntu 22+ (любой провайдер: Timeweb Cloud, Selectel, Hetzner, и т.д.)
