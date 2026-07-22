@@ -9,10 +9,18 @@
     "build": "cd client && npm run build",
     "start": "cd server && npm start",
     "install:all": "npm install && cd server && npm install && cd ../client && npm install",
+    "mobile:assets": "cd client && npm run mobile:assets",
     "mobile:sync": "cd client && npm run mobile:sync",
+    "mobile:sync:prod": "cd client && npm run mobile:sync:prod",
+    "mobile:sync:staging": "cd client && npm run mobile:sync:staging",
+    "mobile:prepare:prod": "cd client && npm run mobile:prepare:prod",
+    "mobile:prepare:staging": "cd client && npm run mobile:prepare:staging",
     "mobile:android:open": "cd client && npm run mobile:android:open",
     "mobile:ios:open": "cd client && npm run mobile:ios:open",
-    "mobile:android:debug": "cd client && npm run mobile:android:debug"
+    "mobile:android:debug": "cd client && npm run mobile:android:debug",
+    "mobile:android:debug:staging": "cd client && npm run mobile:android:debug:staging",
+    "mobile:android:release": "cd client && npm run mobile:android:release",
+    "mobile:android:release:staging": "cd client && npm run mobile:android:release:staging"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

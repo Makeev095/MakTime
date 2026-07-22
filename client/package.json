@@ -8,13 +8,20 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "mobile:assets": "npx @capacitor/assets generate --android --ios --assetPath assets --iconBackgroundColor '#0B132B' --iconBackgroundColorDark '#05070F' --splashBackgroundColor '#0B132B' --splashBackgroundColorDark '#05070F' --logoSplashScale 0.23",
     "mobile:doctor": "npx cap doctor",
     "mobile:copy": "npm run build && npx cap copy",
     "mobile:sync": "npm run build && npx cap sync",
+    "mobile:sync:prod": "CAP_ENV=production npm run mobile:sync",
+    "mobile:sync:staging": "CAP_ENV=staging npm run mobile:sync",
+    "mobile:prepare:prod": "npm run mobile:assets && npm run mobile:sync:prod",
+    "mobile:prepare:staging": "npm run mobile:assets && npm run mobile:sync:staging",
     "mobile:android:open": "npx cap open android",
     "mobile:ios:open": "npx cap open ios",
     "mobile:android:debug": "npm run mobile:sync && cd android && ./gradlew assembleDebug",
-    "mobile:android:release": "npm run mobile:sync && cd android && ./gradlew assembleRelease"
+    "mobile:android:debug:staging": "CAP_ENV=staging npm run mobile:android:debug",
+    "mobile:android:release": "npm run mobile:sync:prod && cd android && ./gradlew clean assembleRelease",
+    "mobile:android:release:staging": "CAP_ENV=staging npm run mobile:android:release"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.2",
@@ -27,6 +34,7 @@
     "socket.io-client": "^4.8.0"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^8.4.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",

@@ -1,8 +1,34 @@
 apply plugin: 'com.android.application'
 
+import java.util.Properties
+import java.io.FileInputStream
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+def hasReleaseSigning = keystoreProperties['storeFile'] &&
+        keystoreProperties['storePassword'] &&
+        keystoreProperties['keyAlias'] &&
+        keystoreProperties['keyPassword']
+
 android {
     namespace = "ru.maktalk.app"
     compileSdk = rootProject.ext.compileSdkVersion
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                enableV1Signing true
+                enableV2Signing true
+            }
+        }
+    }
     defaultConfig {
         applicationId "ru.maktalk.app"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -18,6 +44,9 @@ android {
     }
     buildTypes {
         release {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
@@ -43,6 +72,25 @@ dependencies {
 }
 
 apply from: 'capacitor.build.gradle'
+
+tasks.register('validateReleaseSigning') {
+    doLast {
+        if (!hasReleaseSigning) {
+            throw new GradleException(
+                    "Missing Android release signing setup. Create android/keystore.properties " +
+                            "from android/keystore.properties.example and provide a keystore file."
+            )
+        }
+        def keystoreFile = file(keystoreProperties['storeFile'])
+        if (!keystoreFile.exists()) {
+            throw new GradleException("Keystore file not found: ${keystoreFile}")
+        }
+    }
+}
+
+tasks.matching { it.name.toLowerCase().contains('release') }.configureEach {
+    dependsOn tasks.named('validateReleaseSigning')
+}
 
 try {
     def servicesJSON = file('google-services.json')

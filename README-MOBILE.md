@@ -4,15 +4,19 @@
 
 - `client/android` — Android Studio проект
 - `client/ios` — Xcode проект
-- по умолчанию мобильные приложения открывают `https://maktalk.ru`
+- мобильные окружения:
+  - `production` -> `https://maktalk.ru`
+  - `staging` -> `https://staging.maktalk.ru`
 
 ## Что уже настроено
 
 - Capacitor (`@capacitor/core`, `@capacitor/cli`, `@capacitor/android`, `@capacitor/ios`)
+- генерация брендовых иконок и splash (`@capacitor/assets`)
 - скрипты сборки/синхронизации в `client/package.json`
 - права для звонков и медиа:
   - Android: `CAMERA`, `RECORD_AUDIO`, `INTERNET`
   - iOS: `NSCameraUsageDescription`, `NSMicrophoneUsageDescription`, `NSPhotoLibraryUsageDescription`
+- Android release-подпись через `client/android/keystore.properties`
 
 ---
 
@@ -21,36 +25,127 @@
 ```bash
 cd client
 npm install
-npm run mobile:sync
+npm run mobile:prepare:prod
 ```
 
-Команда `mobile:sync`:
-1. собирает веб-часть (`vite build`)
-2. копирует и синхронизирует ассеты в `android/` и `ios/`
+Команда `mobile:prepare:prod`:
+1. генерирует иконки/splash (`mobile:assets`)
+2. собирает веб-часть (`vite build`)
+3. копирует и синхронизирует ассеты в `android/` и `ios/`
+
+---
+
+## Бренд-иконка и splash
+
+Исходники бренда:
+
+- `client/assets/logo.svg`
+- `client/assets/logo-dark.svg`
+
+Перегенерировать ассеты:
+
+```bash
+cd client
+npm run mobile:assets
+```
+
+После изменения логотипа/цветов синхронизируй платформы:
+
+```bash
+cd client
+npm run mobile:sync:prod
+```
+
+---
+
+## Окружения production/staging
+
+Готовые команды:
+
+```bash
+cd client
+npm run mobile:sync:prod
+npm run mobile:sync:staging
+```
+
+Android debug сразу под staging:
+
+```bash
+cd client
+npm run mobile:android:debug:staging
+```
+
+Полностью кастомный URL:
+
+```bash
+cd client
+CAP_SERVER_URL=https://custom.example.com npm run mobile:sync
+```
+
+Приоритет выбора URL:
+1. `CAP_SERVER_URL`
+2. `CAP_ENV` (`production|staging`)
+3. production fallback (`https://maktalk.ru`)
 
 ---
 
 ## Android (установка напрямую APK, без Google Play)
 
-### Открыть проект в Android Studio
-
-```bash
-cd client
-npm run mobile:android:open
-```
-
-### Собрать APK из терминала
+### Debug APK
 
 ```bash
 cd client
 npm run mobile:android:debug
 ```
 
-APK будет в:
+Файл:
 
 `client/android/app/build/outputs/apk/debug/app-debug.apk`
 
-### Установить на телефон
+### Release APK (подписанный)
+
+1) Создать keystore (один раз):
+
+```bash
+cd client/android
+keytool -genkeypair -v -keystore release-keystore.jks -alias maktalk -keyalg RSA -keysize 2048 -validity 10000
+```
+
+2) Подготовить `keystore.properties`:
+
+```bash
+cd client/android
+cp keystore.properties.example keystore.properties
+```
+
+3) Заполнить:
+
+```properties
+storeFile=release-keystore.jks
+storePassword=YOUR_STORE_PASSWORD
+keyAlias=maktalk
+keyPassword=YOUR_KEY_PASSWORD
+```
+
+4) Собрать подписанный релиз:
+
+```bash
+cd client
+npm run mobile:android:release
+```
+
+Файл:
+
+`client/android/app/build/outputs/apk/release/app-release.apk`
+
+### Открыть Android Studio проект
+
+```bash
+cd client
+npm run mobile:android:open
+```
+
+### Установка на устройство
 
 Через ADB:
 
@@ -70,7 +165,7 @@ adb install -r client/android/app/build/outputs/apk/debug/app-debug.apk
 
 ```bash
 cd client
-npm run mobile:sync
+npm run mobile:sync:prod
 npm run mobile:ios:open
 ```
 
@@ -88,7 +183,7 @@ npm run mobile:ios:open
 ### 3) Продление каждые 7 дней
 
 Для бесплатного Apple ID сертификат живет 7 дней.  
-Раз в неделю просто повторяй:
+Раз в неделю повторяй:
 
 1. подключить iPhone к Mac
 2. открыть проект в Xcode
@@ -98,28 +193,18 @@ npm run mobile:ios:open
 
 ## IPA установка с компьютера (Sideloadly, 7 дней)
 
-Если хочешь именно поток с IPA:
-
 1. собери/экспортируй IPA из Xcode (Development)
 2. открой Sideloadly
 3. выбери IPA, Apple ID и устройство
-4. Install
+4. нажми Install
 
-Подпись тоже живет 7 дней, затем нужно переустановить заново.  
-Если Xcode не дает экспорт IPA на бесплатном аккаунте, используй вариант выше через `Product -> Run`.
+Подпись тоже живет 7 дней, затем нужно переустановить/переподписать.
 
 ---
 
-## Смена URL для staging/другого домена
+## Безопасность release-ключей
 
-По умолчанию мобильные оболочки грузят `https://maktalk.ru`.
-
-Для другого URL можно переопределить переменной окружения:
-
-```bash
-cd client
-CAP_SERVER_URL=https://staging.maktalk.ru npm run mobile:sync
-```
-
-После этого пересобери и переустанови приложение.
+- Не коммить `client/android/keystore.properties` и `*.jks` в git.
+- Сделай резервную копию keystore в безопасном месте (например, encrypted vault).
+- Потеря keystore = невозможность обновлять уже установленное Android-приложение тем же package id.
 
