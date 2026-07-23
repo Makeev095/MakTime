@@ -75,10 +75,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
+    const normalizedUsername = username.trim();
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username: normalizedUsername, password }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
@@ -86,10 +87,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [persistAuth]);
 
   const register = useCallback(async (username: string, displayName: string, password: string) => {
+    const normalizedUsername = username.trim();
+    const normalizedDisplayName = displayName.trim();
     const res = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, displayName, password }),
+      body: JSON.stringify({ username: normalizedUsername, displayName: normalizedDisplayName, password }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);

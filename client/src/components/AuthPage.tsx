@@ -15,11 +15,12 @@ export default function AuthPage() {
     e.preventDefault();
     setError('');
     setLoading(true);
+    const loginValue = username.trim();
     try {
       if (isLogin) {
-        await login(username, password);
+        await login(loginValue, password);
       } else {
-        await register(username, displayName || username, password);
+        await register(loginValue, displayName.trim() || loginValue, password);
       }
     } catch (err: any) {
       setError(err.message);
@@ -63,6 +64,9 @@ export default function AuthPage() {
               onChange={(e) => setUsername(e.target.value)}
               required
               autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
             />
           </div>
 
@@ -74,6 +78,8 @@ export default function AuthPage() {
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 autoComplete="name"
+                autoCorrect="off"
+                spellCheck={false}
               />
             </div>
           )}

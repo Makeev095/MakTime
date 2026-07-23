@@ -451,6 +451,47 @@ function sanitize(str: string): string {
   );
 }
 
+const CYRILLIC_VISUAL_MAP: Record<string, string> = {
+  'а':'a','в':'v','с':'c','е':'e','к':'k','м':'m','н':'n',
+  'о':'o','р':'p','т':'t','х':'x','у':'y','А':'A','В':'V',
+  'С':'C','Е':'E','К':'K','М':'M','Н':'N','О':'O','Р':'P',
+  'Т':'T','Х':'X','У':'Y',
+};
+
+const CYRILLIC_PHONETIC_MAP: Record<string, string> = {
+  'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'e','ж':'zh','з':'z','и':'i',
+  'й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s','т':'t',
+  'у':'u','ф':'f','х':'h','ц':'c','ч':'ch','ш':'sh','щ':'sch','ъ':'','ы':'y','ь':'',
+  'э':'e','ю':'yu','я':'ya',
+  'А':'A','Б':'B','В':'V','Г':'G','Д':'D','Е':'E','Ё':'E','Ж':'Zh','З':'Z','И':'I',
+  'Й':'Y','К':'K','Л':'L','М':'M','Н':'N','О':'O','П':'P','Р':'R','С':'S','Т':'T',
+  'У':'U','Ф':'F','Х':'H','Ц':'C','Ч':'Ch','Ш':'Sh','Щ':'Sch','Ъ':'','Ы':'Y','Ь':'',
+  'Э':'E','Ю':'Yu','Я':'Ya',
+};
+
+function transliterate(value: string, map: Record<string, string>): string {
+  return value.split('').map((ch) => map[ch] ?? ch).join('');
+}
+
+function cleanUsernameToken(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9_]/g, '');
+}
+
+function usernameCandidates(raw: string): string[] {
+  const source = raw.trim().replace(/^@+/, '');
+  const variants = [
+    transliterate(source, CYRILLIC_PHONETIC_MAP),
+    transliterate(source, CYRILLIC_VISUAL_MAP),
+    source,
+  ].map(cleanUsernameToken).filter(Boolean);
+
+  return Array.from(new Set(variants));
+}
+
+function canonicalUsername(raw: string): string {
+  return usernameCandidates(raw)[0] || '';
+}
+
 function toIsoUtc(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   if (value.includes('T')) {
@@ -760,17 +801,9 @@ app.post('/api/auth/register', authLimiter, (req, res) => {
     if (!username || !password || !displayName) {
       return res.status(400).json({ error: 'Все поля обязательны' });
     }
-    if (username.length < 3) return res.status(400).json({ error: 'Минимум 3 символа для имени' });
-    if (password.length < 6) return res.status(400).json({ error: 'Минимум 6 символов для пароля' });
+    if (String(password).length < 6) return res.status(400).json({ error: 'Минимум 6 символов для пароля' });
 
-    const cyrilToLatin: Record<string, string> = {
-      'а':'a','в':'v','с':'c','е':'e','к':'k','м':'m','н':'n',
-      'о':'o','р':'p','т':'t','х':'x','у':'y','А':'A','В':'V',
-      'С':'C','Е':'E','К':'K','М':'M','Н':'N','О':'O','Р':'P',
-      'Т':'T','Х':'X','У':'Y',
-    };
-    const normalized = username.split('').map((ch: string) => cyrilToLatin[ch] || ch).join('');
-    const clean = normalized.toLowerCase().replace(/[^a-z0-9_]/g, '');
+    const clean = canonicalUsername(String(username));
     if (clean.length < 3) {
       return res.status(400).json({ error: 'Минимум 3 символа (латиница, цифры, _)' });
     }
@@ -799,16 +832,11 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'Введите имя и пароль' });
-    const cyrilToLatin: Record<string, string> = {
-      'а':'a','в':'v','с':'c','е':'e','к':'k','м':'m','н':'n',
-      'о':'o','р':'p','т':'t','х':'x','у':'y','А':'A','В':'V',
-      'С':'C','Е':'E','К':'K','М':'M','Н':'N','О':'O','Р':'P',
-      'Т':'T','Х':'X','У':'Y',
-    };
-    const normalized = username.split('').map((ch: string) => cyrilToLatin[ch] || ch).join('');
-    const cleanLogin = normalized.toLowerCase().replace(/[^a-z0-9_]/g, '');
-    const user = stmts.findUserByUsername.get(cleanLogin) as any;
-    if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+    const candidates = usernameCandidates(String(username));
+    const user = candidates
+      .map((candidate) => stmts.findUserByUsername.get(candidate) as any)
+      .find(Boolean);
+    if (!user || !bcrypt.compareSync(String(password), user.password_hash)) {
       return res.status(401).json({ error: 'Неверные данные' });
     }
 

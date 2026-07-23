@@ -57,25 +57,45 @@ export default function App() {
   useEffect(() => {
     const root = document.documentElement;
     const vv = window.visualViewport;
+    let rafId = 0;
+    let stableHeight = window.innerHeight;
+
+    const applyViewport = () => {
+      const visualHeight = vv?.height ?? window.innerHeight;
+      const visualOffsetTop = vv?.offsetTop ?? 0;
+      const rawKeyboardInset = Math.max(0, stableHeight - (visualHeight + visualOffsetTop));
+      const keyboardOpen = rawKeyboardInset > 90;
+
+      if (!keyboardOpen) {
+        const nextLayoutHeight = window.innerHeight;
+        if (Math.abs(nextLayoutHeight - stableHeight) > 120) {
+          // orientation / full viewport change
+          stableHeight = nextLayoutHeight;
+        } else {
+          stableHeight = Math.max(stableHeight, nextLayoutHeight);
+        }
+      }
+
+      root.style.setProperty('--app-height', `${stableHeight}px`);
+      root.style.setProperty('--keyboard-inset', `${keyboardOpen ? Math.round(rawKeyboardInset) : 0}px`);
+      root.classList.toggle('keyboard-open', keyboardOpen);
+    };
 
     const updateViewport = () => {
-      const visualHeight = vv?.height || window.innerHeight;
-      const keyboardInset = Math.max(
-        0,
-        window.innerHeight - ((vv?.height || window.innerHeight) + (vv?.offsetTop || 0))
-      );
-      root.style.setProperty('--app-height', `${visualHeight}px`);
-      root.style.setProperty('--keyboard-inset', `${keyboardInset}px`);
-      root.classList.toggle('keyboard-open', keyboardInset > 120);
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(applyViewport);
     };
 
     updateViewport();
     window.addEventListener('resize', updateViewport);
+    window.addEventListener('orientationchange', updateViewport);
     vv?.addEventListener('resize', updateViewport);
     vv?.addEventListener('scroll', updateViewport);
 
     return () => {
+      cancelAnimationFrame(rafId);
       window.removeEventListener('resize', updateViewport);
+      window.removeEventListener('orientationchange', updateViewport);
       vv?.removeEventListener('resize', updateViewport);
       vv?.removeEventListener('scroll', updateViewport);
       root.style.removeProperty('--app-height');
