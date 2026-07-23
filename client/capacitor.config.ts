@@ -28,6 +28,13 @@ const config: CapacitorConfig = {
     androidScheme: 'https',
     allowNavigation,
   },
+  plugins: {
+    StatusBar: {
+      overlaysWebView: false,
+      backgroundColor: '#0F0F1A',
+      style: 'DARK',
+    },
+  },
 };
 
 export default config;

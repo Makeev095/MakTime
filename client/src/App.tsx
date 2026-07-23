@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, lazy, Suspense } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { useAuth } from './context/AuthContext';
 import { useSocket } from './context/SocketContext';
 import AuthPage from './components/AuthPage';
@@ -18,6 +19,7 @@ type MobileTab = 'chats' | 'contacts' | 'settings';
 export default function App() {
   const { user, token, loading } = useAuth();
   const { incomingCall } = useSocket();
+  const isNative = Capacitor.isNativePlatform();
   const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
   const [callTarget, setCallTarget] = useState<{ userId: string; name: string; conversationId: string; isInitiator: boolean } | null>(null);
   const [callMinimized, setCallMinimized] = useState(false);
@@ -59,6 +61,37 @@ export default function App() {
     const vv = window.visualViewport;
     let rafId = 0;
     let stableHeight = vv?.height ?? window.innerHeight;
+
+    if (isNative) {
+      const updateNativeViewport = () => {
+        const visualHeight = vv?.height ?? window.innerHeight;
+        const visualOffsetTop = vv?.offsetTop ?? 0;
+        const keyboardInset = Math.max(0, window.innerHeight - (visualHeight + visualOffsetTop));
+        root.style.setProperty('--keyboard-inset', `${keyboardInset > 90 ? Math.round(keyboardInset) : 0}px`);
+        root.classList.toggle('keyboard-open', keyboardInset > 90);
+      };
+
+      const scheduleNativeUpdate = () => {
+        cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(updateNativeViewport);
+      };
+
+      scheduleNativeUpdate();
+      window.addEventListener('resize', scheduleNativeUpdate);
+      window.addEventListener('orientationchange', scheduleNativeUpdate);
+      vv?.addEventListener('resize', scheduleNativeUpdate);
+      vv?.addEventListener('scroll', scheduleNativeUpdate);
+
+      return () => {
+        cancelAnimationFrame(rafId);
+        window.removeEventListener('resize', scheduleNativeUpdate);
+        window.removeEventListener('orientationchange', scheduleNativeUpdate);
+        vv?.removeEventListener('resize', scheduleNativeUpdate);
+        vv?.removeEventListener('scroll', scheduleNativeUpdate);
+        root.style.removeProperty('--keyboard-inset');
+        root.classList.remove('keyboard-open');
+      };
+    }
 
     const applyViewport = () => {
       const visualHeight = vv?.height ?? window.innerHeight;
@@ -103,7 +136,7 @@ export default function App() {
       root.style.removeProperty('--keyboard-inset');
       root.classList.remove('keyboard-open');
     };
-  }, []);
+  }, [isNative]);
 
   if (loading) {
     return (

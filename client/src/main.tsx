@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
+import { Capacitor } from '@capacitor/core';
 import { AuthProvider } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
 import App from './App';
@@ -19,7 +20,15 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 );
 
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
-  });
+  if (Capacitor.isNativePlatform()) {
+    void navigator.serviceWorker.getRegistrations().then((regs) => {
+      regs.forEach((reg) => {
+        void reg.unregister();
+      });
+    });
+  } else {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    });
+  }
 }
