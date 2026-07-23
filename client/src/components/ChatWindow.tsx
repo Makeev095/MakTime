@@ -8,6 +8,7 @@ import {
   Smile, Paperclip, X, Reply, Trash2, Play, Pause, Image, FileText,
 } from 'lucide-react';
 import type { Conversation, Message } from '../types';
+import { formatMoscowClockTime, formatMoscowDateLabel, formatMoscowLastSeen } from '../utils/moscowTime';
 
 interface Props {
   conversation: Conversation;
@@ -33,6 +34,27 @@ type MessageSendAck = {
   error?: string;
 };
 
+function pickVoiceMimeType(): string | undefined {
+  if (typeof MediaRecorder === 'undefined') return undefined;
+  const candidates = [
+    'audio/mp4;codecs=mp4a.40.2',
+    'audio/mp4',
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus',
+    'audio/ogg',
+  ];
+
+  return candidates.find((mime) => MediaRecorder.isTypeSupported(mime));
+}
+
+function extensionFromMimeType(mimeType: string): string {
+  if (mimeType.includes('mp4')) return 'm4a';
+  if (mimeType.includes('ogg')) return 'ogg';
+  if (mimeType.includes('wav')) return 'wav';
+  return 'webm';
+}
+
 export default function ChatWindow({ conversation, onBack, onStartCall, onConversationUpdate }: Props) {
   const { user, token } = useAuth();
   const { socket } = useSocket();
@@ -45,6 +67,13 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
   const [peerTyping, setPeerTyping] = useState(false);
   const [playingVoice, setPlayingVoice] = useState<string | null>(null);
   const [selectedMsgId, setSelectedMsgId] = useState<string | null>(null);
+  const [participantPresence, setParticipantPresence] = useState<{
+    status?: string;
+    lastSeen?: string;
+  }>({
+    status: conversation.participant?.status,
+    lastSeen: conversation.participant?.lastSeen,
+  });
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -55,6 +84,13 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
   const recordingTimeRef = useRef(0);
   const typingTimerRef = useRef<number>();
   const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
+
+  useEffect(() => {
+    setParticipantPresence({
+      status: conversation.participant?.status,
+      lastSeen: conversation.participant?.lastSeen,
+    });
+  }, [conversation.id, conversation.participant?.status, conversation.participant?.lastSeen]);
 
   const pushMessage = useCallback((nextMessage: Message, replaceId?: string) => {
     setMessages((prev) => {
@@ -123,11 +159,20 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
       }
     };
 
+    const handleUserStatus = (data: { userId: string; status: string; lastSeen?: string | null }) => {
+      if (data.userId !== conversation.participant?.id) return;
+      setParticipantPresence({
+        status: data.status,
+        lastSeen: data.lastSeen || undefined,
+      });
+    };
+
     socket.on('message:new', handleNewMessage);
     socket.on('message:read', handleRead);
     socket.on('message:deleted', handleDeleted);
     socket.on('typing:start', handleTypingStart);
     socket.on('typing:stop', handleTypingStop);
+    socket.on('user:status', handleUserStatus);
 
     return () => {
       socket.off('message:new', handleNewMessage);
@@ -135,8 +180,24 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
       socket.off('message:deleted', handleDeleted);
       socket.off('typing:start', handleTypingStart);
       socket.off('typing:stop', handleTypingStop);
+      socket.off('user:status', handleUserStatus);
     };
-  }, [socket, conversation.id, user?.id, onConversationUpdate]);
+  }, [socket, conversation.id, conversation.participant?.id, user?.id, onConversationUpdate, pushMessage]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const syncAfterReconnect = () => {
+      socket.emit('conversation:join', conversation.id);
+      fetchMessages();
+    };
+    const clearTyping = () => setPeerTyping(false);
+    socket.on('connect', syncAfterReconnect);
+    socket.on('disconnect', clearTyping);
+    return () => {
+      socket.off('connect', syncAfterReconnect);
+      socket.off('disconnect', clearTyping);
+    };
+  }, [socket, conversation.id, fetchMessages]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -331,16 +392,23 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
   // --- Voice recording ---
   const startRecording = async () => {
     try {
+      if (typeof MediaRecorder === 'undefined') {
+        alert('Голосовые сообщения не поддерживаются на этом устройстве');
+        return;
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+      const preferredMime = pickVoiceMimeType();
+      const mr = preferredMime ? new MediaRecorder(stream, { mimeType: preferredMime }) : new MediaRecorder(stream);
       audioChunksRef.current = [];
       recordingTimeRef.current = 0;
       setRecordingTime(0);
       mr.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
       mr.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        const file = new File([blob], 'voice.webm', { type: 'audio/webm' });
+        const voiceMimeType = mr.mimeType || preferredMime || 'audio/webm';
+        const extension = extensionFromMimeType(voiceMimeType);
+        const blob = new Blob(audioChunksRef.current, { type: voiceMimeType });
+        const file = new File([blob], `voice.${extension}`, { type: voiceMimeType });
         const result = await uploadFile(file);
         if (result) {
           try {
@@ -400,6 +468,12 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
   const toggleVoice = (msgId: string, url: string) => {
     if (!url) return;
     const fullUrl = url.startsWith('http') ? url : `${window.location.origin}${url.startsWith('/') ? '' : '/'}${url}`;
+
+    if (playingVoice && playingVoice !== msgId) {
+      const prev = audioRefs.current.get(playingVoice);
+      if (prev) prev.pause();
+    }
+
     const existing = audioRefs.current.get(msgId);
     if (existing) {
       if (playingVoice === msgId) {
@@ -432,8 +506,7 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
     onStartCall(conversation.participant.id, conversation.participant.displayName, conversation.id);
   };
 
-  const formatTime = (dateStr: string) =>
-    new Date(dateStr).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
+  const formatTime = (dateStr: string) => formatMoscowClockTime(dateStr);
 
   const formatDuration = (s: number) => {
     const m = Math.floor(s / 60);
@@ -445,9 +518,7 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
     const groups: { date: string; messages: Message[] }[] = [];
     let currentDate = '';
     messages.forEach((msg) => {
-      const date = new Date(msg.createdAt).toLocaleDateString('ru', {
-        day: 'numeric', month: 'long', year: 'numeric',
-      });
+      const date = formatMoscowDateLabel(msg.createdAt);
       if (date !== currentDate) {
         currentDate = date;
         groups.push({ date, messages: [msg] });
@@ -533,17 +604,17 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
         </button>
         <div className="avatar" style={{ background: participant?.avatarColor || '#999' }}>
           {participant?.displayName?.[0]?.toUpperCase() || '?'}
-          {participant?.status === 'online' && <span className="online-dot" />}
+          {participantPresence.status === 'online' && <span className="online-dot" />}
         </div>
         <div className="chat-header-info">
           <span className="chat-header-name">{participant?.displayName || 'Пользователь'}</span>
           <span className="chat-header-status">
             {peerTyping
               ? 'печатает...'
-              : participant?.status === 'online'
+              : participantPresence.status === 'online'
                 ? 'в сети'
-                : participant?.lastSeen
-                  ? `был(а) ${formatTime(participant.lastSeen)}`
+                : participantPresence.lastSeen
+                  ? `был(а) ${formatMoscowLastSeen(participantPresence.lastSeen)}`
                   : 'не в сети'}
           </span>
         </div>

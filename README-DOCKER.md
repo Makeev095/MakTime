@@ -70,6 +70,18 @@ NODE_ENV=production
 TURN_USER=maktime
 TURN_PASS=MakTimeT0rn2026!
 TURN_REALM=ваш-домен.com
+
+# iOS APNS (для офлайн-уведомлений и звонков)
+APNS_KEY_PATH=/app/secrets/AuthKey.p8
+APNS_KEY_ID=ВАШ_APNS_KEY_ID
+APNS_TEAM_ID=ВАШ_APPLE_TEAM_ID
+APNS_BUNDLE_ID=ru.maktalk.app
+APNS_PRODUCTION=true
+
+# Android/iOS через Firebase Cloud Messaging (офлайн-уведомления)
+FCM_PROJECT_ID=ВАШ_FIREBASE_PROJECT_ID
+FCM_CLIENT_EMAIL=firebase-adminsdk-xxx@PROJECT_ID.iam.gserviceaccount.com
+FCM_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 ```
 
 Сохранить: `Ctrl+O` → Enter → `Ctrl+X`

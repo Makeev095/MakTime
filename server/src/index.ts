@@ -13,6 +13,7 @@ import path from 'path';
 import fs from 'fs';
 import { logApnsVoipStartup, sendVoipIncomingCall } from './apnsVoip';
 import { logApnsAlertStartup, sendChatMessageAlert } from './apnsAlert';
+import { logFcmStartup, sendFcmNotification } from './fcmPush';
 
 const app = express();
 const httpServer = createServer(app);
@@ -33,8 +34,10 @@ const STUN_SERVERS = (process.env.STUN_SERVERS || 'stun:stun.l.google.com:19302,
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
-const onlineUsers = new Map<string, string>();
+const onlineUsers = new Map<string, Set<string>>();
+const offlineStatusTimers = new Map<string, NodeJS.Timeout>();
 const recentSentMessages = new Map<string, { message: any; ts: number }>();
+const OFFLINE_STATUS_DEBOUNCE_MS = 2500;
 
 ['images', 'voice', 'files', 'video'].forEach((dir) => {
   fs.mkdirSync(path.join(UPLOADS_DIR, dir), { recursive: true });
@@ -260,6 +263,14 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES users(id)
   );
+
+  CREATE TABLE IF NOT EXISTS fcm_device_tokens (
+    user_id TEXT PRIMARY KEY,
+    token TEXT NOT NULL,
+    platform TEXT NOT NULL DEFAULT 'android',
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
 `);
 
 // Migrate existing DB — add columns if missing
@@ -289,7 +300,8 @@ const stmts = {
   searchUsers: db.prepare(
     "SELECT id, username, display_name, avatar_color, avatar_url, status FROM users WHERE (username LIKE ? OR display_name LIKE ?) AND id != ? LIMIT 20"
   ),
-  updateStatus: db.prepare("UPDATE users SET status = ?, last_seen = datetime('now') WHERE id = ?"),
+  setOnlineStatus: db.prepare("UPDATE users SET status = 'online' WHERE id = ?"),
+  setOfflineStatus: db.prepare("UPDATE users SET status = 'offline', last_seen = datetime('now') WHERE id = ?"),
   updateProfile: db.prepare('UPDATE users SET display_name = ?, bio = ?, avatar_url = ? WHERE id = ?'),
 
   addContact: db.prepare('INSERT OR IGNORE INTO contacts (user_id, contact_id) VALUES (?, ?)'),
@@ -430,12 +442,24 @@ const stmts = {
 
   getVoipToken: db.prepare('SELECT token_hex FROM voip_device_tokens WHERE user_id = ?'),
   getApnsToken: db.prepare('SELECT token_hex FROM apns_device_tokens WHERE user_id = ?'),
+  getFcmToken: db.prepare('SELECT token FROM fcm_device_tokens WHERE user_id = ?'),
 };
 
 function sanitize(str: string): string {
   return str.replace(/[<>&"']/g, (c) =>
     ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#x27;' })[c] || c
   );
+}
+
+function toIsoUtc(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  if (value.includes('T')) {
+    return value.endsWith('Z') ? value : `${value}Z`;
+  }
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
+    return `${value.replace(' ', 'T')}Z`;
+  }
+  return value;
 }
 
 function formatMessage(m: any) {
@@ -449,7 +473,7 @@ function formatMessage(m: any) {
     fileName: m.file_name || null,
     duration: m.duration || null,
     replyToId: m.reply_to_id || null,
-    createdAt: m.created_at,
+    createdAt: toIsoUtc(m.created_at) || new Date().toISOString(),
     read: !!m.read,
   };
 }
@@ -482,6 +506,127 @@ function chatPushPreview(type: string, text: string): string {
   const t = (text || '').trim();
   if (!t) return 'Новое сообщение';
   return t.length > 160 ? `${t.slice(0, 157)}…` : t;
+}
+
+function userRoom(userId: string): string {
+  return `user:${userId}`;
+}
+
+function getOnlineSocketIds(userId: string): string[] {
+  return Array.from(onlineUsers.get(userId) || []);
+}
+
+function isUserOnline(userId: string): boolean {
+  return getOnlineSocketIds(userId).length > 0;
+}
+
+function markSocketOnline(userId: string, socketId: string): boolean {
+  const existing = onlineUsers.get(userId);
+  const sockets = existing ?? new Set<string>();
+  const wasOffline = sockets.size === 0;
+  sockets.add(socketId);
+  onlineUsers.set(userId, sockets);
+  return wasOffline;
+}
+
+function markSocketOffline(userId: string, socketId: string): boolean {
+  const sockets = onlineUsers.get(userId);
+  if (!sockets) return true;
+  sockets.delete(socketId);
+  if (sockets.size === 0) {
+    onlineUsers.delete(userId);
+    return true;
+  }
+  return false;
+}
+
+function emitUserStatus(userId: string, status: 'online' | 'offline') {
+  const row = stmts.findUserById.get(userId) as { last_seen?: string | null } | undefined;
+  io.emit('user:status', {
+    userId,
+    status,
+    lastSeen: toIsoUtc(row?.last_seen) || null,
+  });
+}
+
+function ensureUserSocketsInConversation(userId: string, conversationId: string): string[] {
+  const socketIds = getOnlineSocketIds(userId);
+  const joinedNow: string[] = [];
+
+  socketIds.forEach((sid) => {
+    const targetSocket = io.sockets.sockets.get(sid);
+    if (!targetSocket) return;
+    if (targetSocket.rooms.has(conversationId)) {
+      return;
+    }
+    targetSocket.join(conversationId);
+    joinedNow.push(sid);
+  });
+
+  return joinedNow;
+}
+
+async function sendOfflineMessageNotifications(
+  receiverId: string,
+  conversationId: string,
+  title: string,
+  body: string
+) {
+  const apnsRow = stmts.getApnsToken.get(receiverId) as { token_hex: string } | undefined;
+  const fcmRow = stmts.getFcmToken.get(receiverId) as { token: string } | undefined;
+
+  await Promise.allSettled([
+    sendChatMessageAlert(apnsRow?.token_hex, { conversationId, title, body }),
+    sendFcmNotification(fcmRow?.token, {
+      title,
+      body,
+      data: {
+        type: 'message',
+        conversationId,
+      },
+    }),
+  ]);
+}
+
+async function sendOfflineCallNotifications(args: {
+  receiverId: string;
+  conversationId: string;
+  callerId: string;
+  callerName: string;
+}) {
+  const voipRow = stmts.getVoipToken.get(args.receiverId) as { token_hex: string } | undefined;
+  const apnsRow = stmts.getApnsToken.get(args.receiverId) as { token_hex: string } | undefined;
+  const fcmRow = stmts.getFcmToken.get(args.receiverId) as { token: string } | undefined;
+
+  const callUUID = uuidv4();
+  const [voipResult, apnsResult, fcmResult] = await Promise.all([
+    sendVoipIncomingCall(voipRow?.token_hex, {
+      callUUID,
+      from: args.callerId,
+      callerName: args.callerName,
+      conversationId: args.conversationId,
+    }),
+    sendChatMessageAlert(apnsRow?.token_hex, {
+      conversationId: args.conversationId,
+      title: args.callerName || 'MakTalk',
+      body: 'Входящий видеозвонок',
+    }),
+    sendFcmNotification(fcmRow?.token, {
+      title: args.callerName || 'MakTalk',
+      body: 'Входящий видеозвонок',
+      data: {
+        type: 'call',
+        conversationId: args.conversationId,
+        from: args.callerId,
+        callerName: args.callerName,
+        callUUID,
+      },
+    }),
+  ]);
+
+  return {
+    ok: voipResult.ok || apnsResult.ok || fcmResult.ok,
+  };
 }
 
 type MessageSendPayload = {
@@ -567,17 +712,13 @@ function createAndBroadcastMessage(userId: string, data: MessageSendPayload) {
 
   participants.forEach((p) => {
     if (p.id !== userId) {
-      const sid = onlineUsers.get(p.id);
-      if (sid) {
-        const targetSocket = io.sockets.sockets.get(sid);
-        if (targetSocket) {
-          if (!targetSocket.rooms.has(data.conversationId)) {
-            targetSocket.join(data.conversationId);
-            targetSocket.emit('message:new', message);
-          }
-          if (msgCount === 1) {
-            targetSocket.emit('conversation:created', { id: data.conversationId });
-          }
+      if (isUserOnline(p.id)) {
+        const joinedNow = ensureUserSocketsInConversation(p.id, data.conversationId);
+        joinedNow.forEach((sid) => {
+          io.to(sid).emit('message:new', message);
+        });
+        if (msgCount === 1) {
+          io.to(userRoom(p.id)).emit('conversation:created', { id: data.conversationId });
         }
       }
     }
@@ -588,13 +729,8 @@ function createAndBroadcastMessage(userId: string, data: MessageSendPayload) {
   const alertBody = chatPushPreview(type, text);
   participants.forEach((p) => {
     if (p.id === userId) return;
-    if (onlineUsers.has(p.id)) return;
-    const apnsRow = stmts.getApnsToken.get(p.id) as { token_hex: string } | undefined;
-    void sendChatMessageAlert(apnsRow?.token_hex, {
-      conversationId: data.conversationId,
-      title: senderTitle,
-      body: alertBody,
-    });
+    if (isUserOnline(p.id)) return;
+    void sendOfflineMessageNotifications(p.id, data.conversationId, senderTitle, alertBody);
   });
 
   if (dedupeKey) {
@@ -775,6 +911,28 @@ app.post('/api/devices/apns-token', authMiddleware, (req, res) => {
   }
 });
 
+app.post('/api/devices/fcm-token', authMiddleware, (req, res) => {
+  try {
+    const userId = (req as any).userId as string;
+    const { token, platform } = req.body as { token?: string; platform?: string };
+    if (!token || typeof token !== 'string' || token.length < 16) {
+      return res.status(400).json({ error: 'token required (fcm)' });
+    }
+    const plat = typeof platform === 'string' && platform ? platform : 'android';
+    db.prepare(
+      `INSERT INTO fcm_device_tokens (user_id, token, platform, updated_at)
+       VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(user_id) DO UPDATE SET
+         token = excluded.token,
+         platform = excluded.platform,
+         updated_at = datetime('now')`
+    ).run(userId, token, plat);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.put('/api/auth/profile', authMiddleware, (req, res) => {
   const { displayName, bio, avatarUrl } = req.body;
   const userId = (req as any).userId;
@@ -838,7 +996,7 @@ app.get('/api/contacts', authMiddleware, (req, res) => {
       avatarColor: c.avatar_color,
       avatarUrl: c.avatar_url || null,
       status: c.status,
-      lastSeen: c.last_seen,
+      lastSeen: toIsoUtc(c.last_seen),
     }))
   );
 });
@@ -854,7 +1012,7 @@ app.get('/api/conversations', authMiddleware, (req, res) => {
       id: conv.id,
       lastMessage: conv.last_message,
       lastMessageType: conv.last_message_type || 'text',
-      lastMessageTime: conv.last_message_time,
+      lastMessageTime: toIsoUtc(conv.last_message_time),
       unreadCount: conv.unread_count,
       participant: other
         ? {
@@ -864,7 +1022,7 @@ app.get('/api/conversations', authMiddleware, (req, res) => {
             avatarColor: other.avatar_color,
             avatarUrl: other.avatar_url || null,
             status: other.status,
-            lastSeen: other.last_seen,
+            lastSeen: toIsoUtc(other.last_seen),
           }
         : null,
     };
@@ -1056,9 +1214,8 @@ app.post('/api/stories/:storyId/react', authMiddleware, (req, res) => {
   stmts.addStoryReaction.run(id, storyId, userId, emoji);
 
   const reactor = stmts.findUserById.get(userId) as any;
-  const ownerSocket = onlineUsers.get(story.user_id);
-  if (ownerSocket) {
-    io.to(ownerSocket).emit('story:reaction', {
+  if (isUserOnline(story.user_id)) {
+    io.to(userRoom(story.user_id)).emit('story:reaction', {
       storyId,
       emoji,
       userId,
@@ -1219,9 +1376,17 @@ io.use((socket, next) => {
 
 io.on('connection', (socket) => {
   const userId = (socket as any).userId;
-  onlineUsers.set(userId, socket.id);
-  stmts.updateStatus.run('online', userId);
-  io.emit('user:status', { userId, status: 'online' });
+  socket.join(userRoom(userId));
+  const offlineTimer = offlineStatusTimers.get(userId);
+  if (offlineTimer) {
+    clearTimeout(offlineTimer);
+    offlineStatusTimers.delete(userId);
+  }
+  const becameOnline = markSocketOnline(userId, socket.id);
+  if (becameOnline) {
+    stmts.setOnlineStatus.run(userId);
+    emitUserStatus(userId, 'online');
+  }
 
   const allRooms = db.prepare(
     'SELECT conversation_id FROM conversation_participants WHERE user_id = ?'
@@ -1285,20 +1450,17 @@ io.on('connection', (socket) => {
 
   // --- WebRTC Signaling ---
   socket.on('call:initiate', (data: { to: string; conversationId: string; callerName: string }) => {
-    const targetSocketId = onlineUsers.get(data.to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('call:incoming', {
+    if (isUserOnline(data.to)) {
+      io.to(userRoom(data.to)).emit('call:incoming', {
         from: userId,
         callerName: data.callerName,
         conversationId: data.conversationId,
       });
       return;
     }
-    const voipRow = stmts.getVoipToken.get(data.to) as { token_hex: string } | undefined;
-    const callUUID = uuidv4();
-    void sendVoipIncomingCall(voipRow?.token_hex, {
-      callUUID,
-      from: userId,
+    void sendOfflineCallNotifications({
+      receiverId: data.to,
+      callerId: userId,
       callerName: data.callerName,
       conversationId: data.conversationId,
     }).then((r) => {
@@ -1309,39 +1471,41 @@ io.on('connection', (socket) => {
   });
 
   socket.on('call:accept', (data: { to: string }) => {
-    const sid = onlineUsers.get(data.to);
-    if (sid) io.to(sid).emit('call:accepted', { from: userId });
+    io.to(userRoom(data.to)).emit('call:accepted', { from: userId });
   });
 
   socket.on('call:reject', (data: { to: string }) => {
-    const sid = onlineUsers.get(data.to);
-    if (sid) io.to(sid).emit('call:rejected', { from: userId });
+    io.to(userRoom(data.to)).emit('call:rejected', { from: userId });
   });
 
   socket.on('call:end', (data: { to: string }) => {
-    const sid = onlineUsers.get(data.to);
-    if (sid) io.to(sid).emit('call:ended', { from: userId });
+    io.to(userRoom(data.to)).emit('call:ended', { from: userId });
   });
 
   socket.on('webrtc:offer', (data: { to: string; offer: any }) => {
-    const sid = onlineUsers.get(data.to);
-    if (sid) io.to(sid).emit('webrtc:offer', { from: userId, offer: data.offer });
+    io.to(userRoom(data.to)).emit('webrtc:offer', { from: userId, offer: data.offer });
   });
 
   socket.on('webrtc:answer', (data: { to: string; answer: any }) => {
-    const sid = onlineUsers.get(data.to);
-    if (sid) io.to(sid).emit('webrtc:answer', { from: userId, answer: data.answer });
+    io.to(userRoom(data.to)).emit('webrtc:answer', { from: userId, answer: data.answer });
   });
 
   socket.on('webrtc:ice-candidate', (data: { to: string; candidate: any }) => {
-    const sid = onlineUsers.get(data.to);
-    if (sid) io.to(sid).emit('webrtc:ice-candidate', { from: userId, candidate: data.candidate });
+    io.to(userRoom(data.to)).emit('webrtc:ice-candidate', { from: userId, candidate: data.candidate });
   });
 
   socket.on('disconnect', () => {
-    onlineUsers.delete(userId);
-    stmts.updateStatus.run('offline', userId);
-    io.emit('user:status', { userId, status: 'offline' });
+    const nowOffline = markSocketOffline(userId, socket.id);
+    if (!nowOffline) return;
+
+    const timer = setTimeout(() => {
+      offlineStatusTimers.delete(userId);
+      if (isUserOnline(userId)) return;
+      stmts.setOfflineStatus.run(userId);
+      emitUserStatus(userId, 'offline');
+    }, OFFLINE_STATUS_DEBOUNCE_MS);
+
+    offlineStatusTimers.set(userId, timer);
   });
 });
 
@@ -1363,4 +1527,5 @@ httpServer.listen(PORT, () => {
   console.log(`MakTime server running on http://localhost:${PORT}`);
   logApnsVoipStartup();
   logApnsAlertStartup();
+  logFcmStartup();
 });

@@ -89,6 +89,31 @@ CAP_SERVER_URL=https://custom.example.com npm run mobile:sync
 
 ---
 
+## Push-уведомления (сообщения и звонки офлайн)
+
+В приложении уже есть регистрация нативных push-токенов:
+
+- iOS -> `/api/devices/apns-token`
+- Android -> `/api/devices/fcm-token`
+
+Чтобы пуши реально приходили при закрытом приложении, на сервере должны быть заполнены переменные:
+
+- APNS: `APNS_KEY_PATH`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_PRODUCTION`
+- FCM: `FCM_PROJECT_ID`, `FCM_CLIENT_EMAIL`, `FCM_PRIVATE_KEY`
+
+Для Android также добавь `google-services.json` в:
+
+`client/android/app/google-services.json`
+
+После добавления файла/переменных пересобери приложение:
+
+```bash
+cd client
+npm run mobile:sync:prod
+```
+
+---
+
 ## Android (установка напрямую APK, без Google Play)
 
 ### Debug APK

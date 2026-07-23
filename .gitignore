@@ -10,6 +10,7 @@ client/android/app/build/
 client/android/keystore.properties
 client/android/*.jks
 client/android/*.keystore
+client/android/app/google-services.json
 client/ios/App/build/
 client/ios/App/Pods/
 client/ios/App/App.xcworkspace/xcuserdata/

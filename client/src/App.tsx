@@ -5,6 +5,7 @@ import AuthPage from './components/AuthPage';
 import Sidebar from './components/Sidebar';
 import { MessageCircle, Users, Settings } from 'lucide-react';
 import type { Conversation, StoryUser } from './types';
+import { useNativePushRegistration } from './hooks/useNativePushRegistration';
 
 const ChatWindow = lazy(() => import('./components/ChatWindow'));
 const VideoCall = lazy(() => import('./components/VideoCall'));
@@ -15,7 +16,7 @@ const StoryUpload = lazy(() => import('./components/StoryUpload'));
 type MobileTab = 'chats' | 'contacts' | 'settings';
 
 export default function App() {
-  const { user, loading } = useAuth();
+  const { user, token, loading } = useAuth();
   const { incomingCall } = useSocket();
   const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
   const [callTarget, setCallTarget] = useState<{ userId: string; name: string; conversationId: string; isInitiator: boolean } | null>(null);
@@ -32,6 +33,8 @@ export default function App() {
   const handleConversationUpdate = useCallback(() => {
     setRefreshKey((k) => k + 1);
   }, []);
+
+  useNativePushRegistration(token, handleConversationUpdate);
 
   const handleSelectConversation = useCallback((conv: Conversation) => {
     setActiveConversation(conv);

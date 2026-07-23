@@ -5,6 +5,7 @@ import { playNotificationSound } from '../context/SocketContext';
 import StoryBar from './StoryBar';
 import { Search, LogOut, Plus, MessageCircle, Settings, X, Users, Mail, MessageSquare } from 'lucide-react';
 import type { Conversation, User, StoryUser } from '../types';
+import { formatMoscowConversationTime } from '../utils/moscowTime';
 
 type SidebarTab = 'all' | 'unread' | 'contacts';
 type MobileTab = 'chats' | 'contacts' | 'settings';
@@ -78,21 +79,31 @@ export default function Sidebar({ activeConversationId, onSelectConversation, on
 
   useEffect(() => {
     if (!socket) return;
-    const handleStatus = (data: { userId: string; status: string }) => {
+    const handleStatus = (data: { userId: string; status: string; lastSeen?: string | null }) => {
       setConversations((prev) =>
         prev.map((c) =>
           c.participant?.id === data.userId
-            ? { ...c, participant: { ...c.participant!, status: data.status } }
+            ? { ...c, participant: { ...c.participant!, status: data.status, lastSeen: data.lastSeen || c.participant?.lastSeen } }
             : c
         )
       );
       setContacts((prev) =>
-        prev.map((ct) => ct.id === data.userId ? { ...ct, status: data.status } : ct)
+        prev.map((ct) => ct.id === data.userId ? { ...ct, status: data.status, lastSeen: data.lastSeen || ct.lastSeen } : ct)
       );
     };
     socket.on('user:status', handleStatus);
     return () => { socket.off('user:status', handleStatus); };
   }, [socket]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const syncLists = () => {
+      fetchConversations();
+      fetchContacts();
+    };
+    socket.on('connect', syncLists);
+    return () => { socket.off('connect', syncLists); };
+  }, [socket, fetchConversations, fetchContacts]);
 
   useEffect(() => {
     if (searchQuery.length < 2) {
@@ -161,12 +172,7 @@ export default function Sidebar({ activeConversationId, onSelectConversation, on
   };
 
   const formatTime = (dateStr: string | null) => {
-    if (!dateStr) return '';
-    const d = new Date(dateStr);
-    const now = new Date();
-    const isToday = d.toDateString() === now.toDateString();
-    if (isToday) return d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
-    return d.toLocaleDateString('ru', { day: 'numeric', month: 'short' });
+    return formatMoscowConversationTime(dateStr);
   };
 
   const lastMsgPreview = (conv: Conversation) => {
