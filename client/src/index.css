@@ -540,19 +540,42 @@ input, button, textarea { font-family: inherit; font-size: inherit; }
   .video-call-overlay.pip-mode { bottom: 70px; right: 8px; width: 130px; height: 180px; }
 }
 .video-call { position: relative; width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
-.remote-video { width: 100%; height: 100%; object-fit: cover; background: #111; }
-.local-video {
-  position: absolute; top: 80px; right: 16px; width: 120px; height: 160px;
-  object-fit: cover; border-radius: var(--radius);
-  border: 2px solid rgba(255, 255, 255, 0.2); z-index: 10; background: #222;
+.call-video {
+  background: #111;
+  object-fit: cover;
+  transition: top 0.25s ease, right 0.25s ease, width 0.25s ease, height 0.25s ease, border-radius 0.25s ease;
 }
+.call-video.primary {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  z-index: 1;
+  border: none; border-radius: 0;
+  cursor: pointer;
+}
+.call-video.pip {
+  position: absolute;
+  top: calc(72px + var(--safe-area-top));
+  right: 16px;
+  width: 112px; height: 160px;
+  border-radius: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  z-index: 8;
+  cursor: pointer;
+  background: #222;
+}
+@media (min-width: 769px) {
+  .call-video.pip { width: 180px; height: 135px; }
+}
+/* legacy class names kept for older CSS hooks */
+.remote-video, .local-video { display: none; }
 .pip-mode .local-video { display: none; }
-@media (min-width: 769px) { .local-video { width: 200px; height: 150px; } }
 .call-top-bar {
   position: absolute; top: 0; left: 0; right: 0;
   display: flex; flex-direction: column; align-items: center;
   padding: calc(12px + var(--safe-area-top)) 24px 24px;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7), transparent); z-index: 5;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7), transparent); z-index: 10;
+  pointer-events: none;
 }
 .call-name { font-size: 20px; font-weight: 600; color: white; }
 .call-status { font-size: 14px; color: rgba(255, 255, 255, 0.7); margin-top: 4px; }
@@ -560,7 +583,7 @@ input, button, textarea { font-family: inherit; font-size: inherit; }
   position: absolute; bottom: 0; left: 0; right: 0;
   display: flex; align-items: center; justify-content: center; gap: 16px;
   padding: 32px 24px calc(24px + var(--safe-area-bottom));
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent); z-index: 5;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent); z-index: 10;
 }
 .call-control-btn {
   display: flex; align-items: center; justify-content: center;

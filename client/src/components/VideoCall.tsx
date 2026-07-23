@@ -139,6 +139,8 @@ export default function VideoCall({
   const [isFrontCamera, setIsFrontCamera] = useState(true);
   const [hasLocalVideo, setHasLocalVideo] = useState(true);
 
+  const [remotePrimary, setRemotePrimary] = useState(true);
+
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -537,6 +539,8 @@ export default function VideoCall({
     }
   };
 
+  const swapVideos = () => setRemotePrimary((v) => !v);
+
   const formatDur = (s: number) => {
     const m = Math.floor(s / 60);
     const sec = s % 60;
@@ -553,14 +557,28 @@ export default function VideoCall({
     insecure: 'Для звонка нужен HTTPS',
   };
 
+  const remoteClass = remotePrimary ? 'call-video primary' : 'call-video pip';
+  const localClass = remotePrimary ? 'call-video pip' : 'call-video primary';
+
   return (
     <div className="video-call-overlay">
       <div className="video-call">
         <video
           ref={remoteVideoRef}
-          className="remote-video"
+          className={remoteClass}
           autoPlay
           playsInline
+          onClick={swapVideos}
+        />
+
+        <video
+          ref={localVideoRef}
+          className={localClass}
+          autoPlay
+          playsInline
+          muted
+          onClick={swapVideos}
+          style={{ transform: isFrontCamera ? 'scaleX(-1)' : 'none' }}
         />
 
         <div className="call-top-bar">
@@ -568,16 +586,7 @@ export default function VideoCall({
           <span className="call-status">{statusText[status]}</span>
         </div>
 
-        <video
-          ref={localVideoRef}
-          className="local-video"
-          autoPlay
-          playsInline
-          muted
-          style={{ transform: isFrontCamera ? 'scaleX(-1)' : 'none' }}
-        />
-
-        <div className="call-controls">
+        <div className="call-controls" onClick={(e) => e.stopPropagation()}>
           <button
             className={`call-control-btn ${isMuted ? 'active' : ''}`}
             onClick={toggleMute}

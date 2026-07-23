@@ -165,18 +165,38 @@ npm run mobile:sync:prod
 
 ## Android (установка напрямую APK, без Google Play)
 
-### Debug APK
+Самый надёжный способ установить «ту же» версию с `maktalk.ru` — **debug APK** (подписывается debug-ключом Android SDK, ставится почти всегда).
+
+### 1) Debug APK (рекомендуется для теста)
+
+На Mac:
 
 ```bash
+cd ~/MakTime
+git pull origin cursor/fix-chat-layout-calls-22a7
 cd client
+npm install
 npm run mobile:android:debug
 ```
 
-Файл:
+Готовый файл:
 
 `client/android/app/build/outputs/apk/debug/app-debug.apk`
 
-### Release APK (подписанный)
+Скопируй APK на телефон (AirDrop / Telegram / кабель) и открой.
+
+Если Android пишет «не установлено» / конфликт подписи:
+1. Удали старое MakTalk с телефона
+2. Настройки → безопасность → разреши установку из этого источника (файлы / Chrome)
+3. Установи APK снова
+
+Через USB (опционально):
+
+```bash
+adb install -r client/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+### 2) Release APK (подписанный)
 
 1) Создать keystore (один раз):
 
@@ -211,6 +231,8 @@ npm run mobile:android:release
 Файл:
 
 `client/android/app/build/outputs/apk/release/app-release.apk`
+
+> Debug и Release подписаны разными ключами — их нельзя обновлять друг поверх друга. Перед сменой типа APK удали старое приложение.
 
 ### Открыть Android Studio проект
 
