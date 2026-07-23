@@ -4,6 +4,7 @@ export interface User {
   displayName: string;
   avatarColor: string;
   bio?: string;
+  phone?: string | null;
   status?: string;
   lastSeen?: string;
 }

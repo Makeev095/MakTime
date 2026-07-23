@@ -7,6 +7,8 @@ interface AuthContextType {
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, displayName: string, password: string) => Promise<void>;
+  requestPhoneCode: (phone: string) => Promise<{ retryAfterSec?: number; expiresInSec?: number; debugCode?: string }>;
+  verifyPhoneCode: (phone: string, code: string, displayName?: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -99,6 +101,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     persistAuth(data.token, data.user);
   }, [persistAuth]);
 
+  const requestPhoneCode = useCallback(async (phone: string) => {
+    const res = await fetch('/api/auth/phone/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: phone.trim() }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Не удалось отправить SMS-код');
+    return {
+      retryAfterSec: typeof data?.retryAfterSec === 'number' ? data.retryAfterSec : undefined,
+      expiresInSec: typeof data?.expiresInSec === 'number' ? data.expiresInSec : undefined,
+      debugCode: typeof data?.debugCode === 'string' ? data.debugCode : undefined,
+    };
+  }, []);
+
+  const verifyPhoneCode = useCallback(async (phone: string, code: string, displayName?: string) => {
+    const res = await fetch('/api/auth/phone/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: phone.trim(),
+        code: code.trim(),
+        displayName: displayName?.trim() || '',
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Не удалось подтвердить код');
+    persistAuth(data.token, data.user);
+  }, [persistAuth]);
+
   const logout = useCallback(() => {
     localStorage.removeItem('token');
     localStorage.removeItem('maktime_user');
@@ -107,7 +139,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, login, register, requestPhoneCode, verifyPhoneCode, logout }}>
       {children}
     </AuthContext.Provider>
   );

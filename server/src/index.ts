@@ -11,9 +11,11 @@ import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { logApnsVoipStartup, sendVoipIncomingCall } from './apnsVoip';
 import { logApnsAlertStartup, sendChatMessageAlert } from './apnsAlert';
 import { logFcmStartup, sendFcmNotification } from './fcmPush';
+import { logSmsStartup, sendSmsCode } from './smsProvider';
 
 const app = express();
 const httpServer = createServer(app);
@@ -34,6 +36,11 @@ const STUN_SERVERS = (process.env.STUN_SERVERS || 'stun:stun.l.google.com:19302,
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+const OTP_SECRET = process.env.OTP_SECRET || JWT_SECRET;
+const OTP_CODE_TTL_MS = 5 * 60 * 1000;
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
+const OTP_MAX_ATTEMPTS = 5;
+const SMS_DEBUG_ECHO = process.env.SMS_DEBUG_ECHO === '1' || process.env.SMS_DEBUG_ECHO === 'true';
 const onlineUsers = new Map<string, Set<string>>();
 const offlineStatusTimers = new Map<string, NodeJS.Timeout>();
 const recentSentMessages = new Map<string, { message: any; ts: number }>();
@@ -65,6 +72,12 @@ const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 50,
   message: { error: 'Too many auth attempts, try again later' },
+});
+
+const otpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: { error: 'Слишком много запросов к SMS-коду, попробуйте позже' },
 });
 
 // --- File Upload ---
@@ -120,6 +133,8 @@ db.exec(`
     username TEXT UNIQUE NOT NULL,
     display_name TEXT NOT NULL,
     password_hash TEXT NOT NULL,
+    phone_e164 TEXT UNIQUE,
+    phone_verified_at TEXT,
     avatar_color TEXT NOT NULL DEFAULT '#6C63FF',
     bio TEXT DEFAULT '',
     status TEXT DEFAULT 'offline',
@@ -271,6 +286,15 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES users(id)
   );
+
+  CREATE TABLE IF NOT EXISTS auth_phone_codes (
+    phone_e164 TEXT PRIMARY KEY,
+    code_hash TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    requested_at INTEGER NOT NULL,
+    cooldown_until INTEGER NOT NULL
+  );
 `);
 
 // Migrate existing DB — add columns if missing
@@ -287,6 +311,9 @@ safeAddColumn('messages', 'reply_to_id', 'TEXT', 'NULL');
 safeAddColumn('messages', 'deleted', 'INTEGER', '0');
 safeAddColumn('users', 'bio', 'TEXT', "''");
 safeAddColumn('users', 'avatar_url', 'TEXT', 'NULL');
+safeAddColumn('users', 'phone_e164', 'TEXT', 'NULL');
+safeAddColumn('users', 'phone_verified_at', 'TEXT', 'NULL');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_e164 ON users(phone_e164) WHERE phone_e164 IS NOT NULL');
 
 // --- Prepared Statements ---
 const stmts = {
@@ -294,8 +321,11 @@ const stmts = {
     'INSERT INTO users (id, username, display_name, password_hash, avatar_color) VALUES (?, ?, ?, ?, ?)'
   ),
   findUserByUsername: db.prepare('SELECT * FROM users WHERE username = ?'),
+  findUserByPhone: db.prepare(
+    'SELECT * FROM users WHERE phone_e164 = ?'
+  ),
   findUserById: db.prepare(
-    'SELECT id, username, display_name, avatar_color, avatar_url, bio, status, last_seen FROM users WHERE id = ?'
+    'SELECT id, username, display_name, avatar_color, avatar_url, bio, status, last_seen, phone_e164, phone_verified_at FROM users WHERE id = ?'
   ),
   searchUsers: db.prepare(
     "SELECT id, username, display_name, avatar_color, avatar_url, status FROM users WHERE (username LIKE ? OR display_name LIKE ?) AND id != ? LIMIT 20"
@@ -303,6 +333,7 @@ const stmts = {
   setOnlineStatus: db.prepare("UPDATE users SET status = 'online' WHERE id = ?"),
   setOfflineStatus: db.prepare("UPDATE users SET status = 'offline', last_seen = datetime('now') WHERE id = ?"),
   updateProfile: db.prepare('UPDATE users SET display_name = ?, bio = ?, avatar_url = ? WHERE id = ?'),
+  setUserPhone: db.prepare("UPDATE users SET phone_e164 = ?, phone_verified_at = datetime('now') WHERE id = ?"),
 
   addContact: db.prepare('INSERT OR IGNORE INTO contacts (user_id, contact_id) VALUES (?, ?)'),
   getContacts: db.prepare(`
@@ -443,6 +474,21 @@ const stmts = {
   getVoipToken: db.prepare('SELECT token_hex FROM voip_device_tokens WHERE user_id = ?'),
   getApnsToken: db.prepare('SELECT token_hex FROM apns_device_tokens WHERE user_id = ?'),
   getFcmToken: db.prepare('SELECT token FROM fcm_device_tokens WHERE user_id = ?'),
+  upsertPhoneCode: db.prepare(`
+    INSERT INTO auth_phone_codes (phone_e164, code_hash, expires_at, attempts, requested_at, cooldown_until)
+    VALUES (?, ?, ?, 0, ?, ?)
+    ON CONFLICT(phone_e164) DO UPDATE SET
+      code_hash = excluded.code_hash,
+      expires_at = excluded.expires_at,
+      attempts = 0,
+      requested_at = excluded.requested_at,
+      cooldown_until = excluded.cooldown_until
+  `),
+  getPhoneCode: db.prepare('SELECT * FROM auth_phone_codes WHERE phone_e164 = ?'),
+  incrementPhoneCodeAttempts: db.prepare(
+    'UPDATE auth_phone_codes SET attempts = attempts + 1 WHERE phone_e164 = ?'
+  ),
+  deletePhoneCode: db.prepare('DELETE FROM auth_phone_codes WHERE phone_e164 = ?'),
 };
 
 function sanitize(str: string): string {
@@ -490,6 +536,80 @@ function usernameCandidates(raw: string): string[] {
 
 function canonicalUsername(raw: string): string {
   return usernameCandidates(raw)[0] || '';
+}
+
+function normalizePhoneE164(rawPhone: string): string | null {
+  const trimmed = rawPhone.trim();
+  if (!trimmed) return null;
+
+  const plus = trimmed.startsWith('+');
+  const digits = trimmed.replace(/\D/g, '');
+  if (!digits) return null;
+
+  let normalizedDigits = digits;
+  if (digits.length === 11 && digits.startsWith('8')) {
+    normalizedDigits = `7${digits.slice(1)}`;
+  } else if (!plus && digits.length === 10) {
+    normalizedDigits = `7${digits}`;
+  }
+
+  if (normalizedDigits.length < 10 || normalizedDigits.length > 15) {
+    return null;
+  }
+
+  return `+${normalizedDigits}`;
+}
+
+function generateOtpCode(): string {
+  return String(crypto.randomInt(100000, 1000000));
+}
+
+function hashOtpCode(phoneE164: string, code: string): string {
+  return crypto
+    .createHash('sha256')
+    .update(`${OTP_SECRET}:${phoneE164}:${code}`)
+    .digest('hex');
+}
+
+function makeUsernameFromPhone(phoneE164: string): string {
+  const digits = phoneE164.replace(/\D/g, '');
+  return `u${digits.slice(-10)}`;
+}
+
+function pickRandomAvatarColor(): string {
+  const colors = ['#6C63FF', '#FF6584', '#43AA8B', '#F9844A', '#577590', '#F94144', '#90BE6D', '#4ECDC4'];
+  return colors[Math.floor(Math.random() * colors.length)];
+}
+
+function buildUniqueUsername(base: string): string {
+  const cleanedBase = cleanUsernameToken(base).slice(0, 24);
+  const start = cleanedBase.length >= 3 ? cleanedBase : `u${Date.now().toString().slice(-6)}`;
+
+  if (!stmts.findUserByUsername.get(start)) {
+    return start;
+  }
+
+  for (let i = 1; i <= 9999; i += 1) {
+    const suffix = `_${i}`;
+    const candidate = `${start.slice(0, 24 - suffix.length)}${suffix}`;
+    if (!stmts.findUserByUsername.get(candidate)) {
+      return candidate;
+    }
+  }
+
+  return `${start.slice(0, 20)}_${Date.now().toString().slice(-4)}`;
+}
+
+function authUserPayload(user: any) {
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: user.display_name,
+    avatarColor: user.avatar_color,
+    avatarUrl: user.avatar_url || null,
+    bio: user.bio || '',
+    phone: user.phone_e164 || null,
+  };
 }
 
 function toIsoUtc(value: unknown): string | null {
@@ -813,15 +933,15 @@ app.post('/api/auth/register', authLimiter, (req, res) => {
 
     const id = uuidv4();
     const hash = bcrypt.hashSync(password, 12);
-    const colors = ['#6C63FF', '#FF6584', '#43AA8B', '#F9844A', '#577590', '#F94144', '#90BE6D', '#4ECDC4'];
-    const color = colors[Math.floor(Math.random() * colors.length)];
+    const color = pickRandomAvatarColor();
 
     stmts.createUser.run(id, clean, sanitize(displayName), hash, color);
+    const created = stmts.findUserById.get(id) as any;
 
     const token = jwt.sign({ userId: id }, JWT_SECRET, { expiresIn: '30d' });
     res.json({
       token,
-      user: { id, username: clean, displayName: sanitize(displayName), avatarColor: color, avatarUrl: null, bio: '' },
+      user: authUserPayload(created),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -843,14 +963,7 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '30d' });
     res.json({
       token,
-      user: {
-        id: user.id,
-        username: user.username,
-        displayName: user.display_name,
-        avatarColor: user.avatar_color,
-        avatarUrl: user.avatar_url || null,
-        bio: user.bio || '',
-      },
+      user: authUserPayload(user),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -860,14 +973,121 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
 app.get('/api/auth/me', authMiddleware, (req, res) => {
   const user = stmts.findUserById.get((req as any).userId) as any;
   if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json({
-    id: user.id,
-    username: user.username,
-    displayName: user.display_name,
-    avatarColor: user.avatar_color,
-    avatarUrl: user.avatar_url || null,
-    bio: user.bio || '',
-  });
+  res.json(authUserPayload(user));
+});
+
+app.post('/api/auth/phone/request', otpLimiter, async (req, res) => {
+  try {
+    const rawPhone = String(req.body?.phone || '');
+    const phoneE164 = normalizePhoneE164(rawPhone);
+    if (!phoneE164) {
+      return res.status(400).json({ error: 'Некорректный номер телефона' });
+    }
+
+    const now = Date.now();
+    const existing = stmts.getPhoneCode.get(phoneE164) as
+      | { cooldown_until: number; expires_at: number }
+      | undefined;
+    if (existing?.cooldown_until && existing.cooldown_until > now) {
+      return res.status(429).json({
+        error: 'Код уже отправлен, попробуйте позже',
+        retryAfterSec: Math.ceil((existing.cooldown_until - now) / 1000),
+      });
+    }
+
+    const code = generateOtpCode();
+    const codeHash = hashOtpCode(phoneE164, code);
+    const expiresAt = now + OTP_CODE_TTL_MS;
+    const cooldownUntil = now + OTP_RESEND_COOLDOWN_MS;
+    stmts.upsertPhoneCode.run(phoneE164, codeHash, expiresAt, now, cooldownUntil);
+
+    const sendResult = await sendSmsCode(phoneE164, code);
+    if (!sendResult.ok) {
+      console.warn('[SMS] OTP send failed:', sendResult.error);
+      return res.status(502).json({ error: 'Не удалось отправить SMS-код' });
+    }
+
+    const response: Record<string, unknown> = {
+      ok: true,
+      retryAfterSec: Math.round(OTP_RESEND_COOLDOWN_MS / 1000),
+      expiresInSec: Math.round(OTP_CODE_TTL_MS / 1000),
+    };
+    if (SMS_DEBUG_ECHO) {
+      response.debugCode = code;
+    }
+    res.json(response);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/phone/verify', otpLimiter, (req, res) => {
+  try {
+    const phoneE164 = normalizePhoneE164(String(req.body?.phone || ''));
+    const code = String(req.body?.code || '').replace(/\D/g, '').slice(0, 6);
+    const displayNameRaw = String(req.body?.displayName || '').trim();
+
+    if (!phoneE164) return res.status(400).json({ error: 'Некорректный номер телефона' });
+    if (code.length < 4) return res.status(400).json({ error: 'Некорректный код' });
+
+    const row = stmts.getPhoneCode.get(phoneE164) as
+      | { code_hash: string; expires_at: number; attempts: number }
+      | undefined;
+    if (!row) return res.status(400).json({ error: 'Сначала запросите SMS-код' });
+
+    const now = Date.now();
+    if (row.expires_at <= now) {
+      stmts.deletePhoneCode.run(phoneE164);
+      return res.status(400).json({ error: 'Код истёк, запросите новый' });
+    }
+    if (row.attempts >= OTP_MAX_ATTEMPTS) {
+      stmts.deletePhoneCode.run(phoneE164);
+      return res.status(429).json({ error: 'Слишком много попыток, запросите новый код' });
+    }
+
+    const expectedHash = hashOtpCode(phoneE164, code);
+    if (expectedHash !== row.code_hash) {
+      stmts.incrementPhoneCodeAttempts.run(phoneE164);
+      const attemptsLeft = Math.max(0, OTP_MAX_ATTEMPTS - (row.attempts + 1));
+      if (attemptsLeft <= 0) {
+        stmts.deletePhoneCode.run(phoneE164);
+      }
+      return res.status(401).json({
+        error: attemptsLeft > 0 ? 'Неверный код' : 'Слишком много попыток, запросите новый код',
+        attemptsLeft,
+      });
+    }
+
+    stmts.deletePhoneCode.run(phoneE164);
+
+    let user = stmts.findUserByPhone.get(phoneE164) as any;
+    let isNewUser = false;
+
+    if (!user) {
+      isNewUser = true;
+      const id = uuidv4();
+      const username = buildUniqueUsername(makeUsernameFromPhone(phoneE164));
+      const displayName = sanitize(displayNameRaw || `Пользователь ${phoneE164.slice(-4)}`);
+      const passwordHash = bcrypt.hashSync(uuidv4(), 12);
+      const color = pickRandomAvatarColor();
+
+      stmts.createUser.run(id, username, displayName, passwordHash, color);
+      stmts.setUserPhone.run(phoneE164, id);
+      user = stmts.findUserById.get(id) as any;
+    } else if (!user.phone_e164) {
+      stmts.setUserPhone.run(phoneE164, user.id);
+      user = stmts.findUserById.get(user.id) as any;
+    }
+
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({
+      token,
+      user: authUserPayload(user),
+      isNewUser,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/webrtc/config', authMiddleware, (req, res) => {
@@ -967,14 +1187,7 @@ app.put('/api/auth/profile', authMiddleware, (req, res) => {
   const url = avatarUrl && typeof avatarUrl === 'string' && avatarUrl.startsWith('/uploads/') ? avatarUrl : null;
   stmts.updateProfile.run(sanitize(displayName || ''), sanitize(bio || ''), url, userId);
   const user = stmts.findUserById.get(userId) as any;
-  res.json({
-    id: user.id,
-    username: user.username,
-    displayName: user.display_name,
-    avatarColor: user.avatar_color,
-    avatarUrl: user.avatar_url || null,
-    bio: user.bio || '',
-  });
+  res.json(authUserPayload(user));
 });
 
 // --- Search & Contacts ---
@@ -1556,4 +1769,5 @@ httpServer.listen(PORT, () => {
   logApnsVoipStartup();
   logApnsAlertStartup();
   logFcmStartup();
+  logSmsStartup();
 });

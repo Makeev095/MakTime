@@ -8,6 +8,8 @@
   - `production` -> `https://maktalk.ru`
   - `staging` -> `https://staging.maktalk.ru`
 
+> Важно: так как приложение загружает веб-часть с `https://maktalk.ru`, большинство UI/функциональных правок на сервере подтягиваются в установленные iOS/Android приложения автоматически (без переустановки). Пересборка нужна только при изменениях нативного кода/плагинов.
+
 ## Что уже настроено
 
 - Capacitor (`@capacitor/core`, `@capacitor/cli`, `@capacitor/android`, `@capacitor/ios`)
