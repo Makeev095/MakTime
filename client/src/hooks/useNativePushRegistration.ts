@@ -34,10 +34,9 @@ export function useNativePushRegistration(
     if (platform !== 'ios' && platform !== 'android') return;
     const nativePlatform = platform as NativePlatform;
 
-    // Avoid noisy "plugin is not implemented" when the native binary
-    // wasn't rebuilt with @capacitor/push-notifications yet.
+    // Push needs a paid Apple Developer team + rebuilt native binary.
+    // Until then, skip quietly — chat/calls still work online.
     if (!Capacitor.isPluginAvailable('PushNotifications')) {
-      console.info('[Push] plugin unavailable on', nativePlatform, '(rebuild native app after cap sync)');
       return;
     }
 
@@ -45,17 +44,12 @@ export function useNativePushRegistration(
 
     const setupPush = async () => {
       try {
-        // Cap can report the plugin as "available" while the native class is
-        // missing from an outdated binary — probe with checkPermissions.
         const permissionProbe = await PushNotifications.checkPermissions().catch((err: any) => {
           const msg = String(err?.message || err || '');
           if (/not implemented|UNIMPLEMENTED/i.test(msg)) return null;
           throw err;
         });
-        if (!permissionProbe) {
-          console.info('[Push] native plugin missing — run npm run mobile:sync:prod and rebuild iOS');
-          return;
-        }
+        if (!permissionProbe) return;
 
         if (nativePlatform === 'android') {
           await PushNotifications.createChannel({
@@ -73,7 +67,6 @@ export function useNativePushRegistration(
           permission = await PushNotifications.requestPermissions();
         }
         if (permission.receive !== 'granted') {
-          console.warn('[Push] Permission not granted');
           return;
         }
 
@@ -81,14 +74,10 @@ export function useNativePushRegistration(
 
         await PushNotifications.addListener('registration', (token) => {
           if (!active) return;
-          void saveNativePushToken(authToken, nativePlatform, token.value).catch((err) => {
-            console.warn('[Push] token save failed:', err?.message || err);
-          });
+          void saveNativePushToken(authToken, nativePlatform, token.value).catch(() => {});
         });
 
-        await PushNotifications.addListener('registrationError', (error) => {
-          console.warn('[Push] registration error:', error);
-        });
+        await PushNotifications.addListener('registrationError', () => {});
 
         await PushNotifications.addListener('pushNotificationReceived', () => {
           if (!active) return;
@@ -103,13 +92,8 @@ export function useNativePushRegistration(
         });
 
         await PushNotifications.register();
-      } catch (error: any) {
-        const msg = String(error?.message || error || '');
-        if (/not implemented|UNIMPLEMENTED/i.test(msg)) {
-          console.info('[Push] native plugin missing — run npm run mobile:sync:prod and rebuild iOS');
-          return;
-        }
-        console.warn('[Push] setup failed:', msg);
+      } catch {
+        // Ignore until native push is fully configured.
       }
     };
 

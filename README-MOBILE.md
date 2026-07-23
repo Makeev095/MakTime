@@ -39,13 +39,23 @@ npm run mobile:ios:open
 
 ### Push Notifications в Xcode
 
-1. Открой проект: `npm run mobile:ios:open`
-2. В левой панели выбери target **App**
-3. Вкладка **Signing & Capabilities**
-4. Нажми **+ Capability**
-5. Добавь **Push Notifications**
-6. (Опционально) **Background Modes** → включи **Audio, AirPlay, and Picture in Picture**, **Voice over IP**, **Remote notifications**
-7. Product → Clean Build Folder, затем Run на устройстве
+**Важно:** пункта **Push Notifications** в `+ Capability` **нет**, если аккаунт — бесплатный Personal Team.
+Push работает только с платным [Apple Developer Program](https://developer.apple.com/programs/) (~$99/год).
+
+Без платного аккаунта:
+- чат и звонки работают, пока приложение открыто / онлайн;
+- офлайн-пуши на iPhone недоступны — это ограничение Apple, не баг MakTalk.
+
+С платным аккаунтом:
+
+1. Xcode → target **App** → **Signing & Capabilities**
+2. Team = ваш **Organization / Paid** team (не Personal Team)
+3. **+ Capability** → **Push Notifications** (после смены Team пункт появляется)
+4. Либо открой `App/App.entitlements` — там уже есть `aps-environment = development`
+5. На [developer.apple.com](https://developer.apple.com/account/resources/identifiers/list) у App ID `ru.maktalk.app` включи Push Notifications
+6. Product → Clean Build Folder → Run на устройстве
+
+Логи `AppleAVD`, `xpc_user_sessions`, `AudioSession::beginInterruption`, Auto Layout keyboard — системный шум iOS/симулятора, на работу чата не влияют.
 
 ---
 
