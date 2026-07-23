@@ -1,23 +1,24 @@
-import admin from 'firebase-admin';
+import { App, cert, getApp, getApps, initializeApp } from 'firebase-admin/app';
+import { getMessaging } from 'firebase-admin/messaging';
 
 const FCM_PROJECT_ID = process.env.FCM_PROJECT_ID;
 const FCM_CLIENT_EMAIL = process.env.FCM_CLIENT_EMAIL;
 const FCM_PRIVATE_KEY = (process.env.FCM_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 const FCM_STORAGE_BUCKET = process.env.FCM_STORAGE_BUCKET;
 
-let firebaseApp: admin.app.App | null = null;
+let firebaseApp: App | null = null;
 
 function hasFcmConfig(): boolean {
   return !!(FCM_PROJECT_ID && FCM_CLIENT_EMAIL && FCM_PRIVATE_KEY);
 }
 
-function ensureFirebaseApp(): admin.app.App | null {
+function ensureFirebaseApp(): App | null {
   if (firebaseApp) return firebaseApp;
   if (!hasFcmConfig()) return null;
 
   try {
-    firebaseApp = admin.initializeApp({
-      credential: admin.credential.cert({
+    firebaseApp = initializeApp({
+      credential: cert({
         projectId: FCM_PROJECT_ID,
         clientEmail: FCM_CLIENT_EMAIL,
         privateKey: FCM_PRIVATE_KEY,
@@ -25,8 +26,8 @@ function ensureFirebaseApp(): admin.app.App | null {
       ...(FCM_STORAGE_BUCKET ? { storageBucket: FCM_STORAGE_BUCKET } : {}),
     });
   } catch (error: any) {
-    if (admin.apps.length > 0) {
-      firebaseApp = admin.app();
+    if (getApps().length > 0) {
+      firebaseApp = getApp();
     } else {
       console.warn('[FCM] init failed:', error?.message || error);
       return null;
@@ -74,7 +75,7 @@ export async function sendFcmNotification(
   }
 
   try {
-    await app.messaging().send({
+    await getMessaging(app).send({
       token,
       notification: {
         title: payload.title,
