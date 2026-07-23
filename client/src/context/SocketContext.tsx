@@ -50,7 +50,6 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
     s.on('call:incoming', (data: IncomingCall) => {
       setIncomingCall(data);
-      playNotificationSound();
     });
 
     s.on('conversation:created', () => {

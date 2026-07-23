@@ -3,6 +3,7 @@ import { Capacitor } from '@capacitor/core';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { CallAudio } from '../plugins/CallAudio';
+import { startOutgoingRingback, stopCallRingtone } from '../utils/callRingtone';
 import { PhoneOff, Mic, MicOff, Volume2, Ear, SwitchCamera } from 'lucide-react';
 
 interface Props {
@@ -141,6 +142,18 @@ export default function VideoCall({
 
   const [remotePrimary, setRemotePrimary] = useState(true);
 
+  useEffect(() => {
+    if (status !== 'calling') {
+      stopCallRingtone();
+      return;
+    }
+    const stop = startOutgoingRingback();
+    return () => {
+      stop();
+      stopCallRingtone();
+    };
+  }, [status]);
+
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -184,6 +197,7 @@ export default function VideoCall({
       acceptedWhilePreparing.current = false;
       makingOffer.current = false;
       void stopNativeCallAudio();
+      stopCallRingtone();
     };
 
     const doEnd = () => {
