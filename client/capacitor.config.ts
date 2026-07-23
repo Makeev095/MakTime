@@ -30,8 +30,10 @@ const config: CapacitorConfig = {
   },
   plugins: {
     StatusBar: {
-      overlaysWebView: false,
-      backgroundColor: '#0F0F1A',
+      // Overlay so CSS safe-area insets keep the chat header below the notch
+      // without fighting the native WebView frame / keyboard viewport shift.
+      overlaysWebView: true,
+      backgroundColor: '#00000000',
       style: 'DARK',
     },
   },

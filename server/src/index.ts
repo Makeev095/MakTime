@@ -29,8 +29,8 @@ const PORT = process.env.PORT || 3001;
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 const TURN_USER = process.env.TURN_USER || 'maktime';
 const TURN_PASS = process.env.TURN_PASS || 'MakTimeT0rn2026!';
-const TURN_REALM = process.env.TURN_REALM || 'maktime.space';
-const TURN_HOST = process.env.TURN_HOST || '';
+const TURN_REALM = process.env.TURN_REALM || 'maktalk.ru';
+const TURN_HOST = process.env.TURN_HOST || 'maktalk.ru';
 const TURN_PORT = Number(process.env.TURN_PORT || 3478);
 const STUN_SERVERS = (process.env.STUN_SERVERS || 'stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302,stun:stun2.l.google.com:19302')
   .split(',')
@@ -44,7 +44,33 @@ const SMS_DEBUG_ECHO = process.env.SMS_DEBUG_ECHO === '1' || process.env.SMS_DEB
 const onlineUsers = new Map<string, Set<string>>();
 const offlineStatusTimers = new Map<string, NodeJS.Timeout>();
 const recentSentMessages = new Map<string, { message: any; ts: number }>();
+/** Buffer trickle ICE until the peer has registered its WebRTC listeners. */
+const pendingIceByPeer = new Map<string, Array<{ from: string; candidate: any; ts: number }>>();
 const OFFLINE_STATUS_DEBOUNCE_MS = 2500;
+const PENDING_ICE_TTL_MS = 60_000;
+
+function icePendingKey(receiverId: string, senderId: string) {
+  return `${receiverId}<-${senderId}`;
+}
+
+function pushPendingIce(receiverId: string, senderId: string, candidate: any) {
+  const key = icePendingKey(receiverId, senderId);
+  const list = pendingIceByPeer.get(key) || [];
+  const now = Date.now();
+  list.push({ from: senderId, candidate, ts: now });
+  pendingIceByPeer.set(
+    key,
+    list.filter((item) => now - item.ts < PENDING_ICE_TTL_MS).slice(-64)
+  );
+}
+
+function flushPendingIce(receiverId: string, senderId: string, emitTo: (payload: { from: string; candidate: any }) => void) {
+  const key = icePendingKey(receiverId, senderId);
+  const list = pendingIceByPeer.get(key);
+  if (!list?.length) return;
+  pendingIceByPeer.delete(key);
+  list.forEach((item) => emitTo({ from: item.from, candidate: item.candidate }));
+}
 
 ['images', 'voice', 'files', 'video'].forEach((dir) => {
   fs.mkdirSync(path.join(UPLOADS_DIR, dir), { recursive: true });
@@ -369,6 +395,7 @@ const stmts = {
     ORDER BY last_message_time DESC NULLS LAST
   `),
   hideConversation: db.prepare('INSERT OR IGNORE INTO user_hidden_conversations (user_id, conversation_id) VALUES (?, ?)'),
+  unhideConversation: db.prepare('DELETE FROM user_hidden_conversations WHERE user_id = ? AND conversation_id = ?'),
   getConversationParticipants: db.prepare(`
     SELECT u.id, u.username, u.display_name, u.avatar_color, u.avatar_url, u.status, u.last_seen
     FROM conversation_participants cp JOIN users u ON cp.user_id = u.id
@@ -379,9 +406,15 @@ const stmts = {
     INSERT INTO messages (id, conversation_id, sender_id, type, text, file_url, file_name, duration, reply_to_id)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
-  getMessages: db.prepare(
-    'SELECT * FROM messages WHERE conversation_id = ? AND deleted = 0 ORDER BY created_at ASC LIMIT 200'
-  ),
+  getMessages: db.prepare(`
+    SELECT * FROM (
+      SELECT * FROM messages
+      WHERE conversation_id = ? AND deleted = 0
+      ORDER BY created_at DESC, rowid DESC
+      LIMIT 200
+    ) recent
+    ORDER BY created_at ASC, rowid ASC
+  `),
   getMessage: db.prepare('SELECT * FROM messages WHERE id = ?'),
   markRead: db.prepare(
     'UPDATE messages SET read = 1 WHERE conversation_id = ? AND sender_id != ? AND read = 0'
@@ -871,6 +904,12 @@ function createAndBroadcastMessage(userId: string, data: MessageSendPayload) {
     'SELECT COUNT(*) as cnt FROM messages WHERE conversation_id = ? AND deleted = 0'
   ).get(data.conversationId) as any).cnt;
 
+  // New messages should bring the chat back for every participant (e.g. after
+  // hide/delete locally, or after reinstall when the peer kept messaging).
+  participants.forEach((p) => {
+    stmts.unhideConversation.run(p.id, data.conversationId);
+  });
+
   participants.forEach((p) => {
     if (p.id !== userId) {
       if (isUserOnline(p.id)) {
@@ -878,10 +917,13 @@ function createAndBroadcastMessage(userId: string, data: MessageSendPayload) {
         joinedNow.forEach((sid) => {
           io.to(sid).emit('message:new', message);
         });
+        io.to(userRoom(p.id)).emit('conversation:updated', { id: data.conversationId });
         if (msgCount === 1) {
           io.to(userRoom(p.id)).emit('conversation:created', { id: data.conversationId });
         }
       }
+    } else {
+      io.to(userRoom(p.id)).emit('conversation:updated', { id: data.conversationId });
     }
   });
 
@@ -1276,7 +1318,10 @@ app.post('/api/conversations', authMiddleware, (req, res) => {
   const { participantId } = req.body;
 
   const existing = stmts.findDirectConversation.get(userId, participantId) as any;
-  if (existing) return res.json({ id: existing.conversation_id, existing: true });
+  if (existing) {
+    stmts.unhideConversation.run(userId, existing.conversation_id);
+    return res.json({ id: existing.conversation_id, existing: true });
+  }
 
   const id = uuidv4();
   stmts.createConversation.run(id);
@@ -1298,8 +1343,15 @@ app.delete('/api/conversations/:id', authMiddleware, (req, res) => {
 
 app.get('/api/conversations/:id/messages', authMiddleware, (req, res) => {
   const userId = (req as any).userId;
-  const messages = stmts.getMessages.all(req.params.id) as any[];
-  stmts.markRead.run(req.params.id, userId);
+  const conversationId = req.params.id;
+  const participants = stmts.getConversationParticipants.all(conversationId) as any[];
+  if (!participants.some((p: any) => p.id === userId)) {
+    return res.status(403).json({ error: 'Нет доступа к чату' });
+  }
+  // Opening a chat restores it in the list after hide/reinstall.
+  stmts.unhideConversation.run(userId, conversationId);
+  const messages = stmts.getMessages.all(conversationId) as any[];
+  stmts.markRead.run(conversationId, userId);
   res.json(messages.map(formatMessage));
 });
 
@@ -1721,6 +1773,8 @@ io.on('connection', (socket) => {
 
   socket.on('call:end', (data: { to: string }) => {
     io.to(userRoom(data.to)).emit('call:ended', { from: userId });
+    pendingIceByPeer.delete(icePendingKey(userId, data.to));
+    pendingIceByPeer.delete(icePendingKey(data.to, userId));
   });
 
   socket.on('webrtc:offer', (data: { to: string; offer: any }) => {
@@ -1732,7 +1786,17 @@ io.on('connection', (socket) => {
   });
 
   socket.on('webrtc:ice-candidate', (data: { to: string; candidate: any }) => {
+    if (!data?.to || !data.candidate) return;
     io.to(userRoom(data.to)).emit('webrtc:ice-candidate', { from: userId, candidate: data.candidate });
+    pushPendingIce(data.to, userId, data.candidate);
+  });
+
+  // Client emits after registering WebRTC listeners so buffered ICE is replayed.
+  socket.on('webrtc:ready', (data: { peerId: string }) => {
+    if (!data?.peerId) return;
+    flushPendingIce(userId, data.peerId, (payload) => {
+      socket.emit('webrtc:ice-candidate', payload);
+    });
   });
 
   socket.on('disconnect', () => {

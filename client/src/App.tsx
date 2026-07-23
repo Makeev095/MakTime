@@ -63,12 +63,19 @@ export default function App() {
     let stableHeight = vv?.height ?? window.innerHeight;
 
     if (isNative) {
+      // Keep full layout height (keyboard sits over bottom). Counter visualViewport
+      // scroll so the chat header does not slide under the status bar / notch.
       const updateNativeViewport = () => {
         const visualHeight = vv?.height ?? window.innerHeight;
         const visualOffsetTop = vv?.offsetTop ?? 0;
         const keyboardInset = Math.max(0, window.innerHeight - (visualHeight + visualOffsetTop));
-        root.style.setProperty('--keyboard-inset', `${keyboardInset > 90 ? Math.round(keyboardInset) : 0}px`);
-        root.classList.toggle('keyboard-open', keyboardInset > 90);
+        const keyboardOpen = keyboardInset > 90;
+        root.style.setProperty('--keyboard-inset', `${keyboardOpen ? Math.round(keyboardInset) : 0}px`);
+        root.style.setProperty('--vv-offset', `${keyboardOpen ? Math.round(visualOffsetTop) : 0}px`);
+        root.classList.toggle('keyboard-open', keyboardOpen);
+        if (vv && Math.abs(vv.offsetTop) > 0.5) {
+          try { window.scrollTo(0, 0); } catch { /* ignore */ }
+        }
       };
 
       const scheduleNativeUpdate = () => {
@@ -89,6 +96,7 @@ export default function App() {
         vv?.removeEventListener('resize', scheduleNativeUpdate);
         vv?.removeEventListener('scroll', scheduleNativeUpdate);
         root.style.removeProperty('--keyboard-inset');
+        root.style.removeProperty('--vv-offset');
         root.classList.remove('keyboard-open');
       };
     }

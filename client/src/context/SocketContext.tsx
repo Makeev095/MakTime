@@ -57,6 +57,10 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       convCreatedCallbacks.current.forEach((cb) => cb());
     });
 
+    s.on('conversation:updated', () => {
+      convCreatedCallbacks.current.forEach((cb) => cb());
+    });
+
     s.on('connect_error', (err) => {
       console.warn('[Socket] connect_error:', err.message);
     });

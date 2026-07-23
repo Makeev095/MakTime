@@ -115,7 +115,6 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
   useEffect(() => {
     fetchMessages();
     socket?.emit('conversation:join', conversation.id);
-    inputRef.current?.focus();
     return () => {
       socket?.emit('typing:stop', { conversationId: conversation.id });
     };

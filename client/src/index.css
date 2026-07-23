@@ -21,6 +21,7 @@
   --transition: 0.2s ease;
   --app-height: 100dvh;
   --keyboard-inset: 0px;
+  --vv-offset: 0px;
   --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
@@ -110,6 +111,7 @@ input, button, textarea { font-family: inherit; font-size: inherit; }
   position: relative;
   height: var(--app-height, 100dvh);
   overflow: hidden;
+  transform: translateY(var(--vv-offset, 0px));
 }
 .sidebar-container {
   width: 360px; min-width: 360px; height: 100%;
@@ -135,7 +137,12 @@ input, button, textarea { font-family: inherit; font-size: inherit; }
 }
 
 /* ===== Sidebar ===== */
-.sidebar { display: flex; flex-direction: column; height: 100%; background: var(--bg-secondary); }
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-secondary);
+}
 .sidebar-header {
   padding: calc(14px + var(--safe-area-top)) 16px 14px;
   border-bottom: 1px solid var(--border);
@@ -257,6 +264,9 @@ input, button, textarea { font-family: inherit; font-size: inherit; }
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
   min-height: calc(64px + var(--safe-area-top));
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
 }
 .back-btn { display: none; }
 @media (max-width: 768px) { .back-btn { display: inline-flex; } }
