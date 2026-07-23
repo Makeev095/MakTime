@@ -13,6 +13,7 @@
     "mobile:copy": "npm run build && npx cap copy",
     "mobile:sync": "npm run build && npx cap sync",
     "mobile:sync:prod": "CAP_ENV=production npm run mobile:sync",
+    "mobile:sync-prod": "npm run mobile:sync:prod",
     "mobile:sync:staging": "CAP_ENV=staging npm run mobile:sync",
     "mobile:prepare:prod": "npm run mobile:assets && npm run mobile:sync:prod",
     "mobile:prepare:staging": "npm run mobile:assets && npm run mobile:sync:staging",

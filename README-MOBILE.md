@@ -22,6 +22,33 @@
 
 ---
 
+## Быстрый старт (актуальная ветка)
+
+Если локальный `~/MakTime` устарел и нет скрипта `mobile:sync:prod`:
+
+```bash
+cd ~/MakTime
+git fetch origin
+git checkout cursor/fix-chat-layout-calls-22a7
+git pull origin cursor/fix-chat-layout-calls-22a7
+cd client
+npm install
+npm run mobile:sync:prod
+npm run mobile:ios:open
+```
+
+### Push Notifications в Xcode
+
+1. Открой проект: `npm run mobile:ios:open`
+2. В левой панели выбери target **App**
+3. Вкладка **Signing & Capabilities**
+4. Нажми **+ Capability**
+5. Добавь **Push Notifications**
+6. (Опционально) **Background Modes** → включи **Audio, AirPlay, and Picture in Picture**, **Voice over IP**, **Remote notifications**
+7. Product → Clean Build Folder, затем Run на устройстве
+
+---
+
 ## Быстрый старт
 
 ```bash

@@ -204,6 +204,24 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, peerTyping]);
 
+  // Keep the latest messages visible when the keyboard opens/resizes the chat.
+  useEffect(() => {
+    const scrollLatest = () => {
+      bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+    };
+    const onViewport = () => {
+      requestAnimationFrame(scrollLatest);
+    };
+    window.visualViewport?.addEventListener('resize', onViewport);
+    window.visualViewport?.addEventListener('scroll', onViewport);
+    window.addEventListener('resize', onViewport);
+    return () => {
+      window.visualViewport?.removeEventListener('resize', onViewport);
+      window.visualViewport?.removeEventListener('scroll', onViewport);
+      window.removeEventListener('resize', onViewport);
+    };
+  }, [conversation.id]);
+
   // --- Typing indicator ---
   const handleTextChange = (value: string) => {
     setText(value);

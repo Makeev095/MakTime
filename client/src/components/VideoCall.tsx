@@ -3,7 +3,7 @@ import { Capacitor } from '@capacitor/core';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { CallAudio } from '../plugins/CallAudio';
-import { PhoneOff, Mic, MicOff, Volume2, Ear } from 'lucide-react';
+import { PhoneOff, Mic, MicOff, Volume2, Ear, SwitchCamera } from 'lucide-react';
 
 interface Props {
   targetUserId: string;
@@ -95,6 +95,38 @@ async function stopNativeCallAudio() {
   }
 }
 
+async function acquireLocalMedia(): Promise<MediaStream> {
+  const attempts: MediaStreamConstraints[] = [
+    {
+      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    },
+    {
+      video: { facingMode: 'user' },
+      audio: true,
+    },
+    {
+      video: true,
+      audio: true,
+    },
+    {
+      video: false,
+      audio: true,
+    },
+  ];
+
+  let lastError: unknown;
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (error) {
+      lastError = error;
+      console.warn('[WebRTC] getUserMedia attempt failed:', constraints, error);
+    }
+  }
+  throw lastError || new Error('getUserMedia failed');
+}
+
 export default function VideoCall({
   targetUserId, targetName, conversationId, isInitiator, onEnd,
 }: Props) {
@@ -104,6 +136,8 @@ export default function VideoCall({
   const [isMuted, setIsMuted] = useState(false);
   const [duration, setDuration] = useState(0);
   const [audioRoute, setAudioRoute] = useState<AudioRoute>('speaker');
+  const [isFrontCamera, setIsFrontCamera] = useState(true);
+  const [hasLocalVideo, setHasLocalVideo] = useState(true);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -116,7 +150,9 @@ export default function VideoCall({
   const iceCandidateQueue = useRef<RTCIceCandidateInit[]>([]);
   const pendingOffer = useRef<RTCSessionDescriptionInit | null>(null);
   const pendingAnswer = useRef<RTCSessionDescriptionInit | null>(null);
+  const acceptedWhilePreparing = useRef(false);
   const hasRemoteDesc = useRef(false);
+  const makingOffer = useRef(false);
 
   const onEndRef = useRef(onEnd);
   onEndRef.current = onEnd;
@@ -143,6 +179,8 @@ export default function VideoCall({
       iceCandidateQueue.current = [];
       pendingOffer.current = null;
       pendingAnswer.current = null;
+      acceptedWhilePreparing.current = false;
+      makingOffer.current = false;
       void stopNativeCallAudio();
     };
 
@@ -176,6 +214,22 @@ export default function VideoCall({
       }
     };
 
+    const createAndSendOffer = async (iceRestart = false) => {
+      const pc = pcRef.current;
+      if (!pc || makingOffer.current) return;
+      makingOffer.current = true;
+      try {
+        const offer = await pc.createOffer(iceRestart ? { iceRestart: true } : undefined);
+        if (!mounted || pcRef.current !== pc) return;
+        await pc.setLocalDescription(offer);
+        socket.emit('webrtc:offer', { to: targetUserId, offer: pc.localDescription || offer });
+      } catch (e) {
+        console.error('[WebRTC] Offer error:', e);
+      } finally {
+        makingOffer.current = false;
+      }
+    };
+
     const applyOffer = async (offer: RTCSessionDescriptionInit) => {
       const pc = pcRef.current;
       if (!pc) {
@@ -183,12 +237,16 @@ export default function VideoCall({
         return;
       }
       try {
+        if (pc.signalingState !== 'stable' && pc.signalingState !== 'have-local-offer') {
+          // Ignore glare / stale offers while answering.
+          if (pc.signalingState === 'have-remote-offer') return;
+        }
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         hasRemoteDesc.current = true;
         await processQueue(pc);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        socket.emit('webrtc:answer', { to: targetUserId, answer });
+        socket.emit('webrtc:answer', { to: targetUserId, answer: pc.localDescription || answer });
       } catch (e) {
         console.error('[WebRTC] Answer error:', e);
       }
@@ -201,6 +259,10 @@ export default function VideoCall({
         return;
       }
       try {
+        if (pc.signalingState !== 'have-local-offer') {
+          console.warn('[WebRTC] Ignoring answer in state', pc.signalingState);
+          return;
+        }
         await pc.setRemoteDescription(new RTCSessionDescription(answer));
         hasRemoteDesc.current = true;
         await processQueue(pc);
@@ -213,16 +275,11 @@ export default function VideoCall({
       if (!mounted || data.from !== targetUserId) return;
       if (callTimeoutRef.current) clearTimeout(callTimeoutRef.current);
       setStatus('connecting');
-      const pc = pcRef.current;
-      if (!pc) return;
-      try {
-        const offer = await pc.createOffer({
-          offerToReceiveAudio: true,
-          offerToReceiveVideo: true,
-        });
-        await pc.setLocalDescription(offer);
-        socket.emit('webrtc:offer', { to: targetUserId, offer });
-      } catch (e) { console.error('[WebRTC] Offer error:', e); }
+      if (!pcRef.current) {
+        acceptedWhilePreparing.current = true;
+        return;
+      }
+      await createAndSendOffer(false);
     };
 
     const onRejected = () => {
@@ -245,16 +302,12 @@ export default function VideoCall({
     const onIce = async (data: { from: string; candidate: RTCIceCandidateInit }) => {
       if (!mounted || data.from !== targetUserId) return;
       const pc = pcRef.current;
-      if (!pc) {
+      if (!pc || !hasRemoteDesc.current) {
         iceCandidateQueue.current.push(data.candidate);
         return;
       }
-      if (hasRemoteDesc.current) {
-        try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
-        catch (e) { console.warn('[WebRTC] ICE error:', e); }
-      } else {
-        iceCandidateQueue.current.push(data.candidate);
-      }
+      try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+      catch (e) { console.warn('[WebRTC] ICE error:', e); }
     };
 
     const onEnded = () => { if (mounted) doEndRemote(); };
@@ -276,6 +329,16 @@ export default function VideoCall({
       socket.off('call:unavailable', onUnavailable);
     };
 
+    // Listen before media so early signaling is never dropped.
+    socket.on('call:accepted', onAccepted);
+    socket.on('call:rejected', onRejected);
+    socket.on('webrtc:offer', onOffer);
+    socket.on('webrtc:answer', onAnswer);
+    socket.on('webrtc:ice-candidate', onIce);
+    socket.on('call:ended', onEnded);
+    socket.on('call:unavailable', onUnavailable);
+    socket.emit('webrtc:ready', { peerId: targetUserId });
+
     const setupCall = async () => {
       try {
         if (!window.isSecureContext && window.location.hostname !== 'localhost') {
@@ -284,27 +347,28 @@ export default function VideoCall({
           return;
         }
 
-        // Loudspeaker by default — critical for iOS WKWebView WebRTC audio.
         await startNativeCallAudio(true);
         setAudioRoute('speaker');
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        });
-        if (!mounted) { stream.getTracks().forEach((t) => t.stop()); return; }
+        const stream = await acquireLocalMedia();
+        if (!mounted) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
 
         localStreamRef.current = stream;
+        setHasLocalVideo(stream.getVideoTracks().length > 0);
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
           localVideoRef.current.play().catch(() => {});
         }
 
         const pc = new RTCPeerConnection(await loadIceConfig(token));
+        if (!mounted) {
+          pc.close();
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
         pcRef.current = pc;
 
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));
@@ -334,10 +398,7 @@ export default function VideoCall({
             iceRestartCount.current++;
             try { pc.restartIce(); } catch { /* ignore */ }
             if (isInitiator) {
-              pc.createOffer({ iceRestart: true }).then(async (offer) => {
-                await pc.setLocalDescription(offer);
-                socket.emit('webrtc:offer', { to: targetUserId, offer });
-              }).catch(() => {});
+              void createAndSendOffer(true);
             }
           }
         };
@@ -349,14 +410,16 @@ export default function VideoCall({
             if (callTimeoutRef.current) clearTimeout(callTimeoutRef.current);
             setStatus('connected');
             iceRestartCount.current = 0;
-            // Re-assert speaker after media starts (iOS often resets route).
             void setNativeSpeaker(true);
             setAudioRoute('speaker');
             if (!timerRef.current) {
               timerRef.current = window.setInterval(() => setDuration((d) => d + 1), 1000);
             }
           } else if (pc.connectionState === 'failed') {
-            if (iceRestartCount.current >= 3) doEnd();
+            if (iceRestartCount.current >= 3) {
+              setStatus('error');
+              setTimeout(() => doEnd(), 2500);
+            }
           } else if (pc.connectionState === 'disconnected') {
             setTimeout(() => {
               const current = pcRef.current;
@@ -364,21 +427,14 @@ export default function VideoCall({
               if (iceRestartCount.current < 3) {
                 iceRestartCount.current++;
                 try { current.restartIce(); } catch { /* ignore */ }
+                if (isInitiator) void createAndSendOffer(true);
                 return;
               }
-              doEnd();
+              setStatus('error');
+              setTimeout(() => doEnd(), 2500);
             }, 12000);
           }
         };
-
-        socket.on('call:accepted', onAccepted);
-        socket.on('call:rejected', onRejected);
-        socket.on('webrtc:offer', onOffer);
-        socket.on('webrtc:answer', onAnswer);
-        socket.on('webrtc:ice-candidate', onIce);
-        socket.on('call:ended', onEnded);
-        socket.on('call:unavailable', onUnavailable);
-        socket.emit('webrtc:ready', { peerId: targetUserId });
 
         if (pendingOffer.current) {
           const offer = pendingOffer.current;
@@ -392,17 +448,24 @@ export default function VideoCall({
         }
 
         if (isInitiator) {
-          socket.emit('call:initiate', {
-            to: targetUserId,
-            conversationId,
-            callerName: user?.displayName || '',
-          });
-          callTimeoutRef.current = window.setTimeout(() => {
-            if (!mounted) return;
-            setStatus('unavailable');
-            setTimeout(() => doEnd(), 2000);
-          }, 30000);
+          if (acceptedWhilePreparing.current) {
+            acceptedWhilePreparing.current = false;
+            setStatus('connecting');
+            await createAndSendOffer(false);
+          } else {
+            socket.emit('call:initiate', {
+              to: targetUserId,
+              conversationId,
+              callerName: user?.displayName || '',
+            });
+            callTimeoutRef.current = window.setTimeout(() => {
+              if (!mounted) return;
+              setStatus('unavailable');
+              setTimeout(() => doEnd(), 2000);
+            }, 30000);
+          }
         } else {
+          // Accept only after PC + media are ready so the offer is never missed.
           socket.emit('call:accept', { to: targetUserId });
         }
       } catch (err) {
@@ -413,7 +476,7 @@ export default function VideoCall({
       }
     };
 
-    setupCall();
+    void setupCall();
 
     return () => {
       mounted = false;
@@ -438,6 +501,36 @@ export default function VideoCall({
     const next: AudioRoute = audioRoute === 'speaker' ? 'earpiece' : 'speaker';
     setAudioRoute(next);
     await setNativeSpeaker(next === 'speaker');
+  };
+
+  const switchCamera = async () => {
+    if (!hasLocalVideo) return;
+    const nextFront = !isFrontCamera;
+    try {
+      const oldTrack = localStreamRef.current?.getVideoTracks()[0];
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: nextFront ? 'user' : 'environment' } },
+        audio: false,
+      });
+      const newTrack = newStream.getVideoTracks()[0];
+      const pc = pcRef.current;
+      if (pc) {
+        const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
+        if (sender) await sender.replaceTrack(newTrack);
+      }
+      if (oldTrack) {
+        oldTrack.stop();
+        localStreamRef.current?.removeTrack(oldTrack);
+      }
+      localStreamRef.current?.addTrack(newTrack);
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = null;
+        localVideoRef.current.srcObject = localStreamRef.current;
+      }
+      setIsFrontCamera(nextFront);
+    } catch (error) {
+      console.warn('[WebRTC] Camera switch failed:', error);
+    }
   };
 
   const formatDur = (s: number) => {
@@ -477,7 +570,7 @@ export default function VideoCall({
           autoPlay
           playsInline
           muted
-          style={{ transform: 'scaleX(-1)' }}
+          style={{ transform: isFrontCamera ? 'scaleX(-1)' : 'none' }}
         />
 
         <div className="call-controls">
@@ -495,6 +588,15 @@ export default function VideoCall({
           >
             {audioRoute === 'speaker' ? <Volume2 size={24} /> : <Ear size={24} />}
           </button>
+          {hasLocalVideo && (
+            <button
+              className="call-control-btn"
+              onClick={() => { void switchCamera(); }}
+              title="Сменить камеру"
+            >
+              <SwitchCamera size={24} />
+            </button>
+          )}
           <button className="call-control-btn end-call" onClick={endCall} title="Сбросить">
             <PhoneOff size={24} />
           </button>

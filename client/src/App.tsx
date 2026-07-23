@@ -60,19 +60,23 @@ export default function App() {
     let stableHeight = vv?.height ?? window.innerHeight;
 
     if (isNative) {
-      // Keep full layout height (keyboard sits over bottom). Counter visualViewport
-      // scroll so the chat header does not slide under the status bar / notch.
+      // Messenger-style: shrink the app to the visible viewport above the keyboard.
+      // Header stays pinned; input stays above the keyboard; message list scrolls.
       const updateNativeViewport = () => {
         const visualHeight = vv?.height ?? window.innerHeight;
         const visualOffsetTop = vv?.offsetTop ?? 0;
         const keyboardInset = Math.max(0, window.innerHeight - (visualHeight + visualOffsetTop));
-        const keyboardOpen = keyboardInset > 90;
-        root.style.setProperty('--keyboard-inset', `${keyboardOpen ? Math.round(keyboardInset) : 0}px`);
-        root.style.setProperty('--vv-offset', `${keyboardOpen ? Math.round(visualOffsetTop) : 0}px`);
+        const keyboardOpen = keyboardInset > 80 || visualOffsetTop > 10;
+
+        root.style.setProperty('--app-height', `${Math.max(280, Math.round(visualHeight))}px`);
+        root.style.setProperty('--vv-top', `${Math.round(visualOffsetTop)}px`);
+        root.style.setProperty('--vv-offset', '0px');
+        root.style.setProperty('--keyboard-inset', '0px');
         root.classList.toggle('keyboard-open', keyboardOpen);
-        if (vv && Math.abs(vv.offsetTop) > 0.5) {
-          try { window.scrollTo(0, 0); } catch { /* ignore */ }
-        }
+
+        try { window.scrollTo(0, 0); } catch { /* ignore */ }
+        document.body.scrollTop = 0;
+        document.documentElement.scrollTop = 0;
       };
 
       const scheduleNativeUpdate = () => {
@@ -94,6 +98,7 @@ export default function App() {
         vv?.removeEventListener('scroll', scheduleNativeUpdate);
         root.style.removeProperty('--keyboard-inset');
         root.style.removeProperty('--vv-offset');
+        root.style.removeProperty('--vv-top');
         root.classList.remove('keyboard-open');
       };
     }

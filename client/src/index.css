@@ -22,6 +22,7 @@
   --app-height: 100dvh;
   --keyboard-inset: 0px;
   --vv-offset: 0px;
+  --vv-top: 0px;
   --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
@@ -29,10 +30,24 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html, body, #root { width: 100%; height: var(--app-height, 100dvh); overflow: hidden; }
+html, body, #root {
+  width: 100%;
+  height: var(--app-height, 100dvh);
+  overflow: hidden;
+  position: relative;
+}
 
 @supports (height: 100dvh) {
   html, body, #root { height: var(--app-height, 100dvh); }
+}
+
+#root {
+  position: fixed;
+  top: var(--vv-top, 0px);
+  left: 0;
+  right: 0;
+  height: var(--app-height, 100dvh);
+  overflow: hidden;
 }
 
 body {
@@ -109,9 +124,8 @@ input, button, textarea { font-family: inherit; font-size: inherit; }
 .app {
   display: flex;
   position: relative;
-  height: var(--app-height, 100dvh);
+  height: 100%;
   overflow: hidden;
-  transform: translateY(var(--vv-offset, 0px));
 }
 .sidebar-container {
   width: 360px; min-width: 360px; height: 100%;
