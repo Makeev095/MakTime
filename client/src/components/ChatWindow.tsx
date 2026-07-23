@@ -109,8 +109,10 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
     if (res.ok) {
       setMessages(await res.json());
       onConversationUpdate();
+      // Tell the sender immediately that messages are read on open.
+      socket?.emit('message:read', { conversationId: conversation.id });
     }
-  }, [conversation.id, token, onConversationUpdate]);
+  }, [conversation.id, token, onConversationUpdate, socket]);
 
   useEffect(() => {
     fetchMessages();

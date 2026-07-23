@@ -33,6 +33,14 @@ export function useNativePushRegistration(
     const platform = Capacitor.getPlatform();
     if (platform !== 'ios' && platform !== 'android') return;
     const nativePlatform = platform as NativePlatform;
+
+    // Avoid noisy "plugin is not implemented" when the native binary
+    // wasn't rebuilt with @capacitor/push-notifications yet.
+    if (!Capacitor.isPluginAvailable('PushNotifications')) {
+      console.info('[Push] plugin unavailable on', nativePlatform, '(rebuild native app after cap sync)');
+      return;
+    }
+
     let active = true;
 
     const setupPush = async () => {
@@ -92,7 +100,9 @@ export function useNativePushRegistration(
 
     return () => {
       active = false;
-      void PushNotifications.removeAllListeners();
+      if (Capacitor.isPluginAvailable('PushNotifications')) {
+        void PushNotifications.removeAllListeners();
+      }
     };
   }, [authToken, onPushSignal]);
 }

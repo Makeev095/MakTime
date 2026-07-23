@@ -198,10 +198,10 @@ export default function Sidebar({ activeConversationId, onSelectConversation, on
             <button className="icon-btn" onClick={() => { setShowSearch(!showSearch); setShowProfile(false); }} title="Новый чат">
               <Plus size={20} />
             </button>
-            <button className="icon-btn" onClick={() => { setShowProfile(!showProfile); setShowSearch(false); }} title="Профиль">
+            <button className="icon-btn desktop-only" onClick={() => { setShowProfile(!showProfile); setShowSearch(false); }} title="Профиль">
               <Settings size={20} />
             </button>
-            <button className="icon-btn" onClick={logout} title="Выйти">
+            <button className="icon-btn desktop-only" onClick={logout} title="Выйти">
               <LogOut size={20} />
             </button>
           </div>

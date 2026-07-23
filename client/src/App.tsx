@@ -22,7 +22,6 @@ export default function App() {
   const isNative = Capacitor.isNativePlatform();
   const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
   const [callTarget, setCallTarget] = useState<{ userId: string; name: string; conversationId: string; isInitiator: boolean } | null>(null);
-  const [callMinimized, setCallMinimized] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
   const [mobileTab, setMobileTab] = useState<MobileTab>('chats');
@@ -48,12 +47,10 @@ export default function App() {
 
   const handleStartCall = useCallback((userId: string, name: string, conversationId: string) => {
     setCallTarget({ userId, name, conversationId, isInitiator: true });
-    setCallMinimized(false);
   }, []);
 
   const handleEndCall = useCallback(() => {
     setCallTarget(null);
-    setCallMinimized(false);
   }, []);
 
   useEffect(() => {
@@ -236,8 +233,6 @@ export default function App() {
           conversationId={callTarget.conversationId}
           isInitiator={callTarget.isInitiator}
           onEnd={handleEndCall}
-          minimized={callMinimized}
-          onToggleMinimize={() => setCallMinimized((m) => !m)}
         />
         </Suspense>
       )}

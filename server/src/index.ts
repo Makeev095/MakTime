@@ -46,11 +46,17 @@ const offlineStatusTimers = new Map<string, NodeJS.Timeout>();
 const recentSentMessages = new Map<string, { message: any; ts: number }>();
 /** Buffer trickle ICE until the peer has registered its WebRTC listeners. */
 const pendingIceByPeer = new Map<string, Array<{ from: string; candidate: any; ts: number }>>();
+/** Tracks peers that have registered WebRTC listeners (`userId->peerId`). */
+const webrtcReadyPeers = new Set<string>();
 const OFFLINE_STATUS_DEBOUNCE_MS = 2500;
 const PENDING_ICE_TTL_MS = 60_000;
 
 function icePendingKey(receiverId: string, senderId: string) {
   return `${receiverId}<-${senderId}`;
+}
+
+function webrtcReadyKey(userId: string, peerId: string) {
+  return `${userId}->${peerId}`;
 }
 
 function pushPendingIce(receiverId: string, senderId: string, candidate: any) {
@@ -1351,7 +1357,13 @@ app.get('/api/conversations/:id/messages', authMiddleware, (req, res) => {
   // Opening a chat restores it in the list after hide/reinstall.
   stmts.unhideConversation.run(userId, conversationId);
   const messages = stmts.getMessages.all(conversationId) as any[];
-  stmts.markRead.run(conversationId, userId);
+  const markResult = stmts.markRead.run(conversationId, userId) as { changes?: number };
+  if ((markResult.changes || 0) > 0) {
+    io.to(conversationId).emit('message:read', {
+      conversationId,
+      readBy: userId,
+    });
+  }
   res.json(messages.map(formatMessage));
 });
 
@@ -1775,6 +1787,8 @@ io.on('connection', (socket) => {
     io.to(userRoom(data.to)).emit('call:ended', { from: userId });
     pendingIceByPeer.delete(icePendingKey(userId, data.to));
     pendingIceByPeer.delete(icePendingKey(data.to, userId));
+    webrtcReadyPeers.delete(webrtcReadyKey(userId, data.to));
+    webrtcReadyPeers.delete(webrtcReadyKey(data.to, userId));
   });
 
   socket.on('webrtc:offer', (data: { to: string; offer: any }) => {
@@ -1788,12 +1802,16 @@ io.on('connection', (socket) => {
   socket.on('webrtc:ice-candidate', (data: { to: string; candidate: any }) => {
     if (!data?.to || !data.candidate) return;
     io.to(userRoom(data.to)).emit('webrtc:ice-candidate', { from: userId, candidate: data.candidate });
-    pushPendingIce(data.to, userId, data.candidate);
+    // Buffer only until the peer has registered its listeners (avoids duplicates).
+    if (!webrtcReadyPeers.has(webrtcReadyKey(data.to, userId))) {
+      pushPendingIce(data.to, userId, data.candidate);
+    }
   });
 
   // Client emits after registering WebRTC listeners so buffered ICE is replayed.
   socket.on('webrtc:ready', (data: { peerId: string }) => {
     if (!data?.peerId) return;
+    webrtcReadyPeers.add(webrtcReadyKey(userId, data.peerId));
     flushPendingIce(userId, data.peerId, (payload) => {
       socket.emit('webrtc:ice-candidate', payload);
     });
