@@ -57,23 +57,15 @@ npm run mobile:ios:open
 
 ### Push Notifications в Xcode
 
-**Важно:** пункта **Push Notifications** в `+ Capability` **нет**, если аккаунт — бесплатный Personal Team.
-Push работает только с платным [Apple Developer Program](https://developer.apple.com/programs/) (~$99/год).
+**Сейчас пуши на iOS отключены**, чтобы сборка работала на **бесплатном Personal Team**.
 
-Без платного аккаунта:
-- чат и звонки работают, пока приложение открыто / онлайн;
-- офлайн-пуши на iPhone недоступны — это ограничение Apple, не баг MakTalk.
+Если позже будет платный [Apple Developer Program](https://developer.apple.com/programs/):
+1. Верни `aps-environment` в `App/App.entitlements`
+2. Включи `IOS_PUSH_ENABLED = true` в `client/src/hooks/useNativePushRegistration.ts`
+3. Xcode → App → Signing & Capabilities → Team = платный → **+ Capability → Push Notifications**
+4. В Info.plist можно снова добавить `remote-notification` / `voip` в `UIBackgroundModes`
 
-С платным аккаунтом:
-
-1. Xcode → target **App** → **Signing & Capabilities**
-2. Team = ваш **Organization / Paid** team (не Personal Team)
-3. **+ Capability** → **Push Notifications** (после смены Team пункт появляется)
-4. Либо открой `App/App.entitlements` — там уже есть `aps-environment = development`
-5. На [developer.apple.com](https://developer.apple.com/account/resources/identifiers/list) у App ID `ru.maktalk.app` включи Push Notifications
-6. Product → Clean Build Folder → Run на устройстве
-
-Логи `AppleAVD`, `xpc_user_sessions`, `AudioSession::beginInterruption`, Auto Layout keyboard — системный шум iOS/симулятора, на работу чата не влияют.
+Логи `AppleAVD`, `xpc_user_sessions`, `AudioSession::beginInterruption` — системный шум iOS, на чат не влияют.
 
 ---
 

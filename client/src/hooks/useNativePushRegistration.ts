@@ -4,6 +4,9 @@ import { PushNotifications } from '@capacitor/push-notifications';
 
 type NativePlatform = 'ios' | 'android';
 
+/** Free Apple Personal Teams cannot use Push Notifications. Re-enable after paid team. */
+const IOS_PUSH_ENABLED = false;
+
 function resolveTokenEndpoint(platform: NativePlatform): '/api/devices/apns-token' | '/api/devices/fcm-token' {
   return platform === 'ios' ? '/api/devices/apns-token' : '/api/devices/fcm-token';
 }
@@ -32,13 +35,10 @@ export function useNativePushRegistration(
 
     const platform = Capacitor.getPlatform();
     if (platform !== 'ios' && platform !== 'android') return;
-    const nativePlatform = platform as NativePlatform;
+    if (platform === 'ios' && !IOS_PUSH_ENABLED) return;
 
-    // Push needs a paid Apple Developer team + rebuilt native binary.
-    // Until then, skip quietly — chat/calls still work online.
-    if (!Capacitor.isPluginAvailable('PushNotifications')) {
-      return;
-    }
+    const nativePlatform = platform as NativePlatform;
+    if (!Capacitor.isPluginAvailable('PushNotifications')) return;
 
     let active = true;
 
@@ -66,9 +66,7 @@ export function useNativePushRegistration(
         if (permission.receive === 'prompt') {
           permission = await PushNotifications.requestPermissions();
         }
-        if (permission.receive !== 'granted') {
-          return;
-        }
+        if (permission.receive !== 'granted') return;
 
         await PushNotifications.removeAllListeners();
 
