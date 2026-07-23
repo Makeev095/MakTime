@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { Preferences } from '@capacitor/preferences';
 import type { User } from '../types';
 
 interface AuthContextType {
@@ -31,40 +33,108 @@ function getStoredUser(): User | null {
   }
 }
 
+function isNativePlatform(): boolean {
+  try {
+    return Capacitor.isNativePlatform();
+  } catch {
+    return false;
+  }
+}
+
+async function readNativeAuth(): Promise<{ token: string | null; user: User | null }> {
+  if (!isNativePlatform()) return { token: null, user: null };
+  try {
+    const [tokenResult, userResult] = await Promise.all([
+      Preferences.get({ key: 'maktime_native_token' }),
+      Preferences.get({ key: 'maktime_native_user' }),
+    ]);
+    const token = tokenResult.value || null;
+    const user = userResult.value ? (JSON.parse(userResult.value) as User) : null;
+    return { token, user };
+  } catch {
+    return { token: null, user: null };
+  }
+}
+
+async function writeNativeAuth(token: string, user: User): Promise<void> {
+  if (!isNativePlatform()) return;
+  try {
+    await Promise.all([
+      Preferences.set({ key: 'maktime_native_token', value: token }),
+      Preferences.set({ key: 'maktime_native_user', value: JSON.stringify(user) }),
+    ]);
+  } catch {}
+}
+
+async function clearNativeAuth(): Promise<void> {
+  if (!isNativePlatform()) return;
+  try {
+    await Promise.all([
+      Preferences.remove({ key: 'maktime_native_token' }),
+      Preferences.remove({ key: 'maktime_native_user' }),
+    ]);
+  } catch {}
+}
+
+function clearLocalAuth() {
+  localStorage.removeItem('token');
+  localStorage.removeItem('maktime_user');
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(getStoredToken);
   const [user, setUser] = useState<User | null>(getStoredUser);
-  const [loading, setLoading] = useState(!!getStoredToken());
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const t = getStoredToken();
-    if (!t) {
-      setLoading(false);
-      return;
-    }
-
     let cancelled = false;
-    fetch('/api/auth/me', { headers: { Authorization: `Bearer ${t}` } })
-      .then((r) => {
-        if (r.status === 401) {
-          localStorage.removeItem('token');
-          localStorage.removeItem('maktime_user');
-          setToken(null);
-          setUser(null);
-          return null;
+    const bootstrap = async () => {
+      let t = getStoredToken();
+      let u = getStoredUser();
+
+      if (!t) {
+        const nativeAuth = await readNativeAuth();
+        if (nativeAuth.token) {
+          t = nativeAuth.token;
+          u = nativeAuth.user;
+          localStorage.setItem('token', t);
+          if (u) localStorage.setItem('maktime_user', JSON.stringify(u));
         }
-        if (!r.ok) return null;
-        return r.json();
-      })
-      .then((data) => {
-        if (cancelled || !data) return;
-        setUser(data);
-        localStorage.setItem('maktime_user', JSON.stringify(data));
-      })
-      .catch(() => {})
-      .finally(() => {
+      }
+
+      if (!t) {
         if (!cancelled) setLoading(false);
-      });
+        return;
+      }
+
+      if (!cancelled) {
+        setToken(t);
+        if (u) setUser(u);
+      }
+
+      try {
+        const response = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${t}` } });
+        if (response.status === 401) {
+          clearLocalAuth();
+          await clearNativeAuth();
+          if (!cancelled) {
+            setToken(null);
+            setUser(null);
+          }
+          return;
+        }
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!cancelled) setUser(data);
+        localStorage.setItem('maktime_user', JSON.stringify(data));
+        await writeNativeAuth(t, data);
+      } catch {}
+      finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    void bootstrap();
 
     return () => { cancelled = true; };
   }, []);
@@ -74,6 +144,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem('maktime_user', JSON.stringify(usr));
     setToken(tkn);
     setUser(usr);
+    void writeNativeAuth(tkn, usr);
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
@@ -132,8 +203,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [persistAuth]);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('maktime_user');
+    clearLocalAuth();
+    void clearNativeAuth();
     setToken(null);
     setUser(null);
   }, []);

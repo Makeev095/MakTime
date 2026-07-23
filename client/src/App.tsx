@@ -58,7 +58,7 @@ export default function App() {
     const root = document.documentElement;
     const vv = window.visualViewport;
     let rafId = 0;
-    let stableHeight = window.innerHeight;
+    let stableHeight = vv?.height ?? window.innerHeight;
 
     const applyViewport = () => {
       const visualHeight = vv?.height ?? window.innerHeight;
@@ -67,7 +67,7 @@ export default function App() {
       const keyboardOpen = rawKeyboardInset > 90;
 
       if (!keyboardOpen) {
-        const nextLayoutHeight = window.innerHeight;
+        const nextLayoutHeight = vv?.height ?? window.innerHeight;
         if (Math.abs(nextLayoutHeight - stableHeight) > 120) {
           // orientation / full viewport change
           stableHeight = nextLayoutHeight;
@@ -76,7 +76,8 @@ export default function App() {
         }
       }
 
-      root.style.setProperty('--app-height', `${stableHeight}px`);
+      const appHeight = keyboardOpen ? visualHeight + visualOffsetTop : stableHeight;
+      root.style.setProperty('--app-height', `${Math.max(320, Math.round(appHeight))}px`);
       root.style.setProperty('--keyboard-inset', `${keyboardOpen ? Math.round(rawKeyboardInset) : 0}px`);
       root.classList.toggle('keyboard-open', keyboardOpen);
     };

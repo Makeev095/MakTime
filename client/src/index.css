@@ -300,6 +300,7 @@ input, button, textarea { font-family: inherit; font-size: inherit; }
 .message-time { font-size: 11px; color: rgba(255, 255, 255, 0.5); }
 .message.received .message-time { color: var(--text-muted); }
 .message-status { display: flex; color: rgba(255, 255, 255, 0.6); }
+.message-status.read { color: #88f07a; }
 
 /* Message actions (reply/delete) */
 .message-actions {
@@ -475,10 +476,6 @@ input, button, textarea { font-family: inherit; font-size: inherit; }
 
 .keyboard-open .sidebar {
   padding-bottom: 0;
-}
-
-.keyboard-open .chat-input-area {
-  padding-bottom: max(calc(10px + var(--keyboard-inset)), var(--safe-area-bottom));
 }
 
 /* Settings page */

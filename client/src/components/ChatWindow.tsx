@@ -570,7 +570,7 @@ export default function ChatWindow({ conversation, onBack, onStartCall, onConver
         <div className="message-meta">
           <span className="message-time">{formatTime(msg.createdAt)}</span>
           {msg.senderId === user?.id && (
-            <span className="message-status">
+            <span className={`message-status ${msg.read ? 'read' : 'unread'}`}>
               {msg.read ? <CheckCheck size={14} /> : <Check size={14} />}
             </span>
           )}
