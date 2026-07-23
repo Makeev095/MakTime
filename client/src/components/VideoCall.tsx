@@ -17,8 +17,8 @@ type AudioRoute = 'speaker' | 'earpiece';
 
 function buildFallbackIceConfig(): RTCConfiguration {
   const host = window.location.hostname || 'maktalk.ru';
-  const turnHosts = host === 'maktalk.ru' ? [host] : [host, 'maktalk.ru'];
-  const turnServers = turnHosts.flatMap((turnHost) => ([
+  const hosts = Array.from(new Set([host, 'maktalk.ru', '168.222.203.221']));
+  const turnServers = hosts.flatMap((turnHost) => ([
     {
       urls: `turn:${turnHost}:3478`,
       username: 'maktime',
@@ -386,6 +386,7 @@ export default function VideoCall({
 
         pc.onicecandidate = (event) => {
           if (event.candidate) {
+            console.log('[WebRTC] local ICE', event.candidate.type || event.candidate.candidate);
             socket.emit('webrtc:ice-candidate', { to: targetUserId, candidate: event.candidate });
           }
         };
@@ -394,6 +395,9 @@ export default function VideoCall({
           if (!mounted) return;
           const state = pc.iceConnectionState;
           console.log('[WebRTC] ICE state:', state);
+          if (state === 'connected' || state === 'completed') {
+            setStatus('connected');
+          }
           if ((state === 'failed' || state === 'disconnected') && iceRestartCount.current < 3) {
             iceRestartCount.current++;
             try { pc.restartIce(); } catch { /* ignore */ }

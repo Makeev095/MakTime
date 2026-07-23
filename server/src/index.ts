@@ -48,6 +48,8 @@ const recentSentMessages = new Map<string, { message: any; ts: number }>();
 const pendingIceByPeer = new Map<string, Array<{ from: string; candidate: any; ts: number }>>();
 /** Tracks peers that have registered WebRTC listeners (`userId->peerId`). */
 const webrtcReadyPeers = new Set<string>();
+const pendingOffersByPeer = new Map<string, { from: string; offer: any; ts: number }>();
+const pendingAnswersByPeer = new Map<string, { from: string; answer: any; ts: number }>();
 const OFFLINE_STATUS_DEBOUNCE_MS = 2500;
 const PENDING_ICE_TTL_MS = 60_000;
 
@@ -1145,10 +1147,19 @@ app.get('/api/webrtc/config', authMiddleware, (req, res) => {
   ];
 
   if (TURN_USER && TURN_PASS && turnHost) {
-    iceServers.push(
-      { urls: `turn:${turnHost}:${TURN_PORT}`, username: TURN_USER, credential: TURN_PASS },
-      { urls: `turn:${turnHost}:${TURN_PORT}?transport=tcp`, username: TURN_USER, credential: TURN_PASS }
-    );
+    const hosts = Array.from(new Set([
+      turnHost,
+      'maktalk.ru',
+      process.env.EXTERNAL_IP || '',
+      '168.222.203.221',
+    ].filter(Boolean)));
+
+    for (const host of hosts) {
+      iceServers.push(
+        { urls: `turn:${host}:${TURN_PORT}`, username: TURN_USER, credential: TURN_PASS },
+        { urls: `turn:${host}:${TURN_PORT}?transport=tcp`, username: TURN_USER, credential: TURN_PASS }
+      );
+    }
   }
 
   res.json({
@@ -1789,14 +1800,34 @@ io.on('connection', (socket) => {
     pendingIceByPeer.delete(icePendingKey(data.to, userId));
     webrtcReadyPeers.delete(webrtcReadyKey(userId, data.to));
     webrtcReadyPeers.delete(webrtcReadyKey(data.to, userId));
+    pendingOffersByPeer.delete(icePendingKey(data.to, userId));
+    pendingAnswersByPeer.delete(icePendingKey(data.to, userId));
+    pendingOffersByPeer.delete(icePendingKey(userId, data.to));
+    pendingAnswersByPeer.delete(icePendingKey(userId, data.to));
   });
 
   socket.on('webrtc:offer', (data: { to: string; offer: any }) => {
+    if (!data?.to || !data.offer) return;
     io.to(userRoom(data.to)).emit('webrtc:offer', { from: userId, offer: data.offer });
+    if (!webrtcReadyPeers.has(webrtcReadyKey(data.to, userId))) {
+      pendingOffersByPeer.set(icePendingKey(data.to, userId), {
+        from: userId,
+        offer: data.offer,
+        ts: Date.now(),
+      });
+    }
   });
 
   socket.on('webrtc:answer', (data: { to: string; answer: any }) => {
+    if (!data?.to || !data.answer) return;
     io.to(userRoom(data.to)).emit('webrtc:answer', { from: userId, answer: data.answer });
+    if (!webrtcReadyPeers.has(webrtcReadyKey(data.to, userId))) {
+      pendingAnswersByPeer.set(icePendingKey(data.to, userId), {
+        from: userId,
+        answer: data.answer,
+        ts: Date.now(),
+      });
+    }
   });
 
   socket.on('webrtc:ice-candidate', (data: { to: string; candidate: any }) => {
@@ -1812,6 +1843,20 @@ io.on('connection', (socket) => {
   socket.on('webrtc:ready', (data: { peerId: string }) => {
     if (!data?.peerId) return;
     webrtcReadyPeers.add(webrtcReadyKey(userId, data.peerId));
+
+    const offerKey = icePendingKey(userId, data.peerId);
+    const pendingOffer = pendingOffersByPeer.get(offerKey);
+    if (pendingOffer && Date.now() - pendingOffer.ts < PENDING_ICE_TTL_MS) {
+      socket.emit('webrtc:offer', { from: pendingOffer.from, offer: pendingOffer.offer });
+      pendingOffersByPeer.delete(offerKey);
+    }
+
+    const pendingAnswer = pendingAnswersByPeer.get(offerKey);
+    if (pendingAnswer && Date.now() - pendingAnswer.ts < PENDING_ICE_TTL_MS) {
+      socket.emit('webrtc:answer', { from: pendingAnswer.from, answer: pendingAnswer.answer });
+      pendingAnswersByPeer.delete(offerKey);
+    }
+
     flushPendingIce(userId, data.peerId, (payload) => {
       socket.emit('webrtc:ice-candidate', payload);
     });

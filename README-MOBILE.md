@@ -24,6 +24,24 @@
 
 ## Быстрый старт (актуальная ветка)
 
+Если `git pull` ругается на локальные правки iOS (`project.pbxproj` / `Info.plist`):
+
+```bash
+cd ~/MakTime
+git fetch origin
+git checkout cursor/fix-chat-layout-calls-22a7
+# сохранить локальные Xcode-правки и подтянуть сервер
+git stash push -u -m "local-ios" -- client/ios/App/App.xcodeproj/project.pbxproj client/ios/App/App/Info.plist
+git pull origin cursor/fix-chat-layout-calls-22a7
+# если свои правки ещё нужны: git stash pop
+# обычно для MakTalk достаточно серверной версии:
+# git stash drop
+cd client
+npm install
+npm run mobile:sync:prod
+npm run mobile:ios:open
+```
+
 Если локальный `~/MakTime` устарел и нет скрипта `mobile:sync:prod`:
 
 ```bash

@@ -44,7 +44,7 @@ services:
       turnserver -n
       --lt-cred-mech
       --user=${TURN_USER:-maktime}:${TURN_PASS:-MakTimeT0rn2026!}
-      --realm=${TURN_REALM:-maktime.space}
+      --realm=${TURN_REALM:-maktalk.ru}
       --external-ip=${EXTERNAL_IP:-168.222.203.221}
       --fingerprint
       --no-tls
