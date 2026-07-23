@@ -410,10 +410,10 @@ const stmts = {
     SELECT * FROM (
       SELECT * FROM messages
       WHERE conversation_id = ? AND deleted = 0
-      ORDER BY created_at DESC, rowid DESC
+      ORDER BY created_at DESC
       LIMIT 200
     ) recent
-    ORDER BY created_at ASC, rowid ASC
+    ORDER BY created_at ASC
   `),
   getMessage: db.prepare('SELECT * FROM messages WHERE id = ?'),
   markRead: db.prepare(
