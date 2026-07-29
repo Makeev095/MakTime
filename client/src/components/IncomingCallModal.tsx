@@ -1,4 +1,6 @@
+import { useEffect } from 'react';
 import { useSocket } from '../context/SocketContext';
+import { startIncomingRingtone, stopCallRingtone } from '../utils/callRingtone';
 import { Phone, PhoneOff } from 'lucide-react';
 
 interface Props {
@@ -8,14 +10,28 @@ interface Props {
 export default function IncomingCallModal({ onAccept }: Props) {
   const { socket, incomingCall, setIncomingCall } = useSocket();
 
+  useEffect(() => {
+    if (!incomingCall) {
+      stopCallRingtone();
+      return;
+    }
+    const stop = startIncomingRingtone();
+    return () => {
+      stop();
+      stopCallRingtone();
+    };
+  }, [incomingCall]);
+
   if (!incomingCall) return null;
 
   const handleReject = () => {
+    stopCallRingtone();
     socket?.emit('call:reject', { to: incomingCall.from });
     setIncomingCall(null);
   };
 
   const handleAccept = () => {
+    stopCallRingtone();
     onAccept();
     setIncomingCall(null);
   };

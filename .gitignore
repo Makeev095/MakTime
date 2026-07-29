@@ -4,6 +4,17 @@ node_modules/
 # Build output
 client/dist/
 server/dist/
+client/android/.gradle/
+client/android/build/
+client/android/app/build/
+client/android/keystore.properties
+client/android/*.jks
+client/android/*.keystore
+client/android/app/google-services.json
+client/ios/App/build/
+client/ios/App/Pods/
+client/ios/App/App.xcworkspace/xcuserdata/
+client/ios/App/App.xcodeproj/xcuserdata/
 
 # Database
 server/maktime.db

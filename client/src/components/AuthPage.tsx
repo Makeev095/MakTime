@@ -6,8 +6,8 @@ export default function AuthPage() {
   const { login, register } = useAuth();
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState('');
-  const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -15,11 +15,13 @@ export default function AuthPage() {
     e.preventDefault();
     setError('');
     setLoading(true);
+    const normalizedUsername = username.trim();
+    const normalizedDisplayName = displayName.trim();
     try {
       if (isLogin) {
-        await login(username, password);
+        await login(normalizedUsername, password);
       } else {
-        await register(username, displayName || username, password);
+        await register(normalizedUsername, normalizedDisplayName || normalizedUsername, password);
       }
     } catch (err: any) {
       setError(err.message);
@@ -35,20 +37,26 @@ export default function AuthPage() {
           <div className="auth-logo-icon">
             <MessageCircle size={40} />
           </div>
-          <h1>MakTime</h1>
+          <h1>MakTalk</h1>
           <p className="auth-subtitle">Мессенджер с видеозвонками</p>
         </div>
 
         <div className="auth-tabs">
           <button
             className={`auth-tab ${isLogin ? 'active' : ''}`}
-            onClick={() => { setIsLogin(true); setError(''); }}
+            onClick={() => {
+              setIsLogin(true);
+              setError('');
+            }}
           >
             Вход
           </button>
           <button
             className={`auth-tab ${!isLogin ? 'active' : ''}`}
-            onClick={() => { setIsLogin(false); setError(''); }}
+            onClick={() => {
+              setIsLogin(false);
+              setError('');
+            }}
           >
             Регистрация
           </button>
@@ -63,6 +71,9 @@ export default function AuthPage() {
               onChange={(e) => setUsername(e.target.value)}
               required
               autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
             />
           </div>
 
@@ -74,6 +85,8 @@ export default function AuthPage() {
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 autoComplete="name"
+                autoCorrect="off"
+                spellCheck={false}
               />
             </div>
           )}

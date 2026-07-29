@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MakTalk</string>
+    <string name="title_activity_main">MakTalk</string>
+    <string name="package_name">ru.maktalk.app</string>
+    <string name="custom_url_scheme">ru.maktalk.app</string>
+</resources>

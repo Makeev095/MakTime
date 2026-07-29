@@ -1,5 +1,7 @@
 # MakTime — Деплой через Docker на VPS
 
+> Для iOS/Android сборок см. `README-MOBILE.md`.
+
 ## Что нужно
 
 - VPS с Ubuntu 22+ (любой провайдер: Timeweb Cloud, Selectel, Hetzner, и т.д.)
@@ -68,6 +70,29 @@ NODE_ENV=production
 TURN_USER=maktime
 TURN_PASS=MakTimeT0rn2026!
 TURN_REALM=ваш-домен.com
+
+# iOS APNS (для офлайн-уведомлений и звонков)
+APNS_KEY_PATH=/app/secrets/AuthKey.p8
+APNS_KEY_ID=ВАШ_APNS_KEY_ID
+APNS_TEAM_ID=ВАШ_APPLE_TEAM_ID
+APNS_BUNDLE_ID=ru.maktalk.app
+APNS_PRODUCTION=true
+
+# Android/iOS через Firebase Cloud Messaging (офлайн-уведомления)
+FCM_PROJECT_ID=ВАШ_FIREBASE_PROJECT_ID
+FCM_CLIENT_EMAIL=firebase-adminsdk-xxx@PROJECT_ID.iam.gserviceaccount.com
+FCM_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+
+# SMS авторизация по номеру телефона (OTP)
+# Вариант 1 (для продакшена, недорого): sms.ru
+SMS_PROVIDER=smsru
+SMS_RU_API_ID=ВАШ_SMS_RU_API_ID
+SMS_RU_FROM=MAKTALK
+OTP_SECRET=дополнительный_секрет_для_otp
+
+# Вариант 2 (для теста без SMS-оператора):
+# SMS_PROVIDER=console
+# SMS_DEBUG_ECHO=1
 ```
 
 Сохранить: `Ctrl+O` → Enter → `Ctrl+X`

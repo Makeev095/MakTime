@@ -1,10 +1,12 @@
-import { useState, useCallback, lazy, Suspense } from 'react';
+import { useState, useCallback, useEffect, lazy, Suspense } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { useAuth } from './context/AuthContext';
 import { useSocket } from './context/SocketContext';
 import AuthPage from './components/AuthPage';
 import Sidebar from './components/Sidebar';
 import { MessageCircle, Users, Settings } from 'lucide-react';
 import type { Conversation, StoryUser } from './types';
+import { useNativePushRegistration } from './hooks/useNativePushRegistration';
 
 const ChatWindow = lazy(() => import('./components/ChatWindow'));
 const VideoCall = lazy(() => import('./components/VideoCall'));
@@ -15,11 +17,11 @@ const StoryUpload = lazy(() => import('./components/StoryUpload'));
 type MobileTab = 'chats' | 'contacts' | 'settings';
 
 export default function App() {
-  const { user, loading } = useAuth();
+  const { user, token, loading } = useAuth();
   const { incomingCall } = useSocket();
+  const isNative = Capacitor.isNativePlatform();
   const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
   const [callTarget, setCallTarget] = useState<{ userId: string; name: string; conversationId: string; isInitiator: boolean } | null>(null);
-  const [callMinimized, setCallMinimized] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
   const [mobileTab, setMobileTab] = useState<MobileTab>('chats');
@@ -33,6 +35,8 @@ export default function App() {
     setRefreshKey((k) => k + 1);
   }, []);
 
+  useNativePushRegistration(token, handleConversationUpdate);
+
   const handleSelectConversation = useCallback((conv: Conversation) => {
     setActiveConversation(conv);
     if (window.innerWidth < 768) {
@@ -43,13 +47,106 @@ export default function App() {
 
   const handleStartCall = useCallback((userId: string, name: string, conversationId: string) => {
     setCallTarget({ userId, name, conversationId, isInitiator: true });
-    setCallMinimized(false);
   }, []);
 
   const handleEndCall = useCallback(() => {
     setCallTarget(null);
-    setCallMinimized(false);
   }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const vv = window.visualViewport;
+    let rafId = 0;
+    let stableHeight = vv?.height ?? window.innerHeight;
+
+    if (isNative) {
+      // Messenger-style: shrink the app to the visible viewport above the keyboard.
+      // Header stays pinned; input stays above the keyboard; message list scrolls.
+      const updateNativeViewport = () => {
+        const visualHeight = vv?.height ?? window.innerHeight;
+        const visualOffsetTop = vv?.offsetTop ?? 0;
+        const keyboardInset = Math.max(0, window.innerHeight - (visualHeight + visualOffsetTop));
+        const keyboardOpen = keyboardInset > 80 || visualOffsetTop > 10;
+
+        root.style.setProperty('--app-height', `${Math.max(280, Math.round(visualHeight))}px`);
+        root.style.setProperty('--vv-top', `${Math.round(visualOffsetTop)}px`);
+        root.style.setProperty('--vv-offset', '0px');
+        root.style.setProperty('--keyboard-inset', '0px');
+        root.classList.toggle('keyboard-open', keyboardOpen);
+
+        try { window.scrollTo(0, 0); } catch { /* ignore */ }
+        document.body.scrollTop = 0;
+        document.documentElement.scrollTop = 0;
+      };
+
+      const scheduleNativeUpdate = () => {
+        cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(updateNativeViewport);
+      };
+
+      scheduleNativeUpdate();
+      window.addEventListener('resize', scheduleNativeUpdate);
+      window.addEventListener('orientationchange', scheduleNativeUpdate);
+      vv?.addEventListener('resize', scheduleNativeUpdate);
+      vv?.addEventListener('scroll', scheduleNativeUpdate);
+
+      return () => {
+        cancelAnimationFrame(rafId);
+        window.removeEventListener('resize', scheduleNativeUpdate);
+        window.removeEventListener('orientationchange', scheduleNativeUpdate);
+        vv?.removeEventListener('resize', scheduleNativeUpdate);
+        vv?.removeEventListener('scroll', scheduleNativeUpdate);
+        root.style.removeProperty('--keyboard-inset');
+        root.style.removeProperty('--vv-offset');
+        root.style.removeProperty('--vv-top');
+        root.classList.remove('keyboard-open');
+      };
+    }
+
+    const applyViewport = () => {
+      const visualHeight = vv?.height ?? window.innerHeight;
+      const visualOffsetTop = vv?.offsetTop ?? 0;
+      const rawKeyboardInset = Math.max(0, stableHeight - (visualHeight + visualOffsetTop));
+      const keyboardOpen = rawKeyboardInset > 90;
+
+      if (!keyboardOpen) {
+        const nextLayoutHeight = vv?.height ?? window.innerHeight;
+        if (Math.abs(nextLayoutHeight - stableHeight) > 120) {
+          // orientation / full viewport change
+          stableHeight = nextLayoutHeight;
+        } else {
+          stableHeight = Math.max(stableHeight, nextLayoutHeight);
+        }
+      }
+
+      const appHeight = keyboardOpen ? visualHeight + visualOffsetTop : stableHeight;
+      root.style.setProperty('--app-height', `${Math.max(320, Math.round(appHeight))}px`);
+      root.style.setProperty('--keyboard-inset', `${keyboardOpen ? Math.round(rawKeyboardInset) : 0}px`);
+      root.classList.toggle('keyboard-open', keyboardOpen);
+    };
+
+    const updateViewport = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(applyViewport);
+    };
+
+    updateViewport();
+    window.addEventListener('resize', updateViewport);
+    window.addEventListener('orientationchange', updateViewport);
+    vv?.addEventListener('resize', updateViewport);
+    vv?.addEventListener('scroll', updateViewport);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', updateViewport);
+      window.removeEventListener('orientationchange', updateViewport);
+      vv?.removeEventListener('resize', updateViewport);
+      vv?.removeEventListener('scroll', updateViewport);
+      root.style.removeProperty('--app-height');
+      root.style.removeProperty('--keyboard-inset');
+      root.classList.remove('keyboard-open');
+    };
+  }, [isNative]);
 
   if (loading) {
     return (
@@ -141,8 +238,6 @@ export default function App() {
           conversationId={callTarget.conversationId}
           isInitiator={callTarget.isInitiator}
           onEnd={handleEndCall}
-          minimized={callMinimized}
-          onToggleMinimize={() => setCallMinimized((m) => !m)}
         />
         </Suspense>
       )}

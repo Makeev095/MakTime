@@ -40,16 +40,28 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
     const s = io(window.location.origin, {
       auth: { token },
-      transports: ['websocket', 'polling'],
+      transports: ['polling', 'websocket'],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 10000,
     });
 
     s.on('call:incoming', (data: IncomingCall) => {
       setIncomingCall(data);
-      playNotificationSound();
     });
 
     s.on('conversation:created', () => {
       convCreatedCallbacks.current.forEach((cb) => cb());
+    });
+
+    s.on('conversation:updated', () => {
+      convCreatedCallbacks.current.forEach((cb) => cb());
+    });
+
+    s.on('connect_error', (err) => {
+      console.warn('[Socket] connect_error:', err.message);
     });
 
     socketRef.current = s;
